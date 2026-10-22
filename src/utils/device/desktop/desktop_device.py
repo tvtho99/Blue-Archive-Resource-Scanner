@@ -15,7 +15,8 @@ set_dpi_awareness()  # Before pyautogui is imported, see set_dpi_awareness
 
 import pyautogui  # noqa: E402
 
-pyautogui.FAILSAFE = True
+pyautogui.FAILSAFE = True  # Mouse into a screen corner = emergency stop
+FAILSAFE_MSG = "Mouse moved to a screen corner (pyautogui failsafe)."
 
 logger = logging.getLogger("BA-Scanner")
 
@@ -88,16 +89,22 @@ class DesktopDevice(DeviceController):
 
     def tap(self, x, y, duration_ms=100):
         sx, sy = self._to_screen(x, y)
-        pyautogui.click(sx, sy)
+        try:
+            pyautogui.click(sx, sy)
+        except pyautogui.FailSafeException as e:
+            raise DeviceUnavailableError(FAILSAFE_MSG) from e
         return True
 
     def swipe(self, x1, y1, x2, y2, duration_ms=500):
         sx1, sy1 = self._to_screen(x1, y1)
         sx2, sy2 = self._to_screen(x2, y2)
-        pyautogui.moveTo(sx1, sy1)
-        pyautogui.mouseDown()
         try:
-            pyautogui.moveTo(sx2, sy2, duration=duration_ms / 1000)
-        finally:
-            pyautogui.mouseUp()
+            pyautogui.moveTo(sx1, sy1)
+            pyautogui.mouseDown()
+            try:
+                pyautogui.moveTo(sx2, sy2, duration=duration_ms / 1000)
+            finally:
+                pyautogui.mouseUp()
+        except pyautogui.FailSafeException as e:
+            raise DeviceUnavailableError(FAILSAFE_MSG) from e
         return True

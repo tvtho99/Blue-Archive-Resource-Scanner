@@ -54,6 +54,7 @@ class ScreenState:
         )
 
         self.visited: set[str] = set()
+        self.scanned: set[str] = set()  # Visited AND scanned without errors
         self.current_state = NavState.INIT
         self.target_screen: str | None = None
 
@@ -142,27 +143,31 @@ class ScreenState:
         deps = self.config[screen_name].get("skip_if_visited", [])
         return any(d in self.visited for d in deps)
 
-    def _execute_process(self, screen_name: str, cfg: dict):
-        """Triggers the actual OCR work."""
+    def _abandon(self, screen_name: str):
+        """Give up on a screen so CHECKING_CONTEXT moves on."""
+        self.visited.add(screen_name)
+        if screen_name == "Students":
+            # The detail scan starts from the list, tapping "first student" elsewhere is blind
+            self.visited.add("Student")
+
+    def _execute_process(self, screen_name: str, cfg: dict) -> bool:
+        """Triggers the actual OCR work. Returns True if the screen was fully scanned."""
 
         self.logger.info(f"[bold yellow]Scanning[/bold yellow] {screen_name}...")
 
-        if screen_name in ["Currencies"]:
-            get_currencies(self.navigator.device)
+        if screen_name == "Currencies":
+            return get_currencies(self.navigator.device)
 
         if screen_name in ("Equipment", "Items"):
-            item_grid(
+            return item_grid(
                 self.navigator.device,
                 grid_type=cfg["grid_type"],
             )
 
-        elif screen_name == "Students":
-            # Tap first student to enter detail view
-            self.logger.info("Reached Students list, entering individual stat page...")
-            self.visited.add(screen_name)
+        if screen_name == "Student":
+            return get_student_info(self.navigator.device)
 
-        elif screen_name == "Student":
-            get_student_info(self.navigator.device)
+        return False
 
     def _transition(self, progress: Progress, task_id: TaskID) -> NavState:
         """
@@ -264,7 +269,7 @@ class ScreenState:
                 self.logger.error(
                     f"[bold red]Error:[/bold red] Abandoning {self.target_screen} - {e!s}"
                 )
-                self.visited.add(self.target_screen)  # Skip it
+                self._abandon(self.target_screen)
                 progress.advance(task_id)
                 # Ensure we return home to clear any stuck menus before trying the next screen
                 self.navigator.ensure_at_home()
@@ -278,23 +283,42 @@ class ScreenState:
                 description=f"[bold yellow]Processing[/bold yellow] {self.target_screen}",
             )
 
-            if self.target_screen == "Students":
-                # Tap first student to enter the stat view
-                self.logger.info(
-                    "[bold blue]Reached Students List.[/bold blue] Entering detail view..."
+            try:
+                if self.target_screen == "Students":
+                    # Tap first student to enter the stat view
+                    self.logger.info(
+                        "[bold blue]Reached Students List.[/bold blue] Entering detail view..."
+                    )
+                    self.navigator.navigate_to_target(
+                        "first_student", in_menu_tab=False
+                    )
+                    time.sleep(
+                        2
+                        * Config.WAIT_TIME_MULTIPLIER
+                        * Config.WAIT_TIME_SCREEN_NAV_MULTIPLIER
+                    )
+                    ok = True  # NAVIGATING "Student" verifies the detail page opened
+                else:
+                    ok = self._execute_process(self.target_screen, cfg)
+            except DeviceUnavailableError:
+                raise
+            except Exception:  # noqa: BLE001
+                self.logger.exception(
+                    f"[bold red]Error:[/bold red] Scanning {self.target_screen} crashed"
                 )
-                self.navigator.navigate_to_target("first_student", in_menu_tab=False)
-                time.sleep(
-                    2
-                    * Config.WAIT_TIME_MULTIPLIER
-                    * Config.WAIT_TIME_SCREEN_NAV_MULTIPLIER
-                )
+                ok = False
 
-            else:
-                self._execute_process(self.target_screen, cfg)
+            progress.advance(task_id)
+            if not ok:
+                self.logger.error(
+                    f"[bold red]Error:[/bold red] {self.target_screen} was not fully scanned, "
+                    "its results will not be post-processed."
+                )
+                self._abandon(self.target_screen)
+                return NavState.CHECKING_CONTEXT
 
             self.visited.add(self.target_screen)
-            progress.advance(task_id)
+            self.scanned.add(self.target_screen)
             if self.target_screen == "Students":
                 # We are forcing the target screen to Student to avoid getting derailed
                 self.target_screen = "Student"

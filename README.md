@@ -183,7 +183,7 @@ Navigate the game by hand, then type the screen you are on (`home`, `menu`, `equ
 
 After a successful scan, check the `output/` folder:
 
-- `owned/scanned_counts.json` -> Raw item & equipment counts.
+- `owned/scanned_equipment.json`, `owned/scanned_items.json` -> Raw equipment & item counts, replaced on every scan of that screen.
 - `owned/scanned_students.json` -> Raw student stats
 - `owned/scanned_currencies.json` -> AP, Credits, Pyroxene
 - `equipment_final_values.json`, `items_final_values.json`, `students_final_values.json` -> Processed & mapped data ready for planning

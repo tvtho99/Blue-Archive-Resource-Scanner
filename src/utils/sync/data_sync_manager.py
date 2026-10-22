@@ -3,7 +3,6 @@ from pathlib import Path
 
 import requests
 from rich.console import Console
-from tenacity import Retrying, stop_after_attempt, wait_fixed
 
 from src.core.config import Config
 from src.utils.data.io import read_json, write_json
@@ -55,13 +54,11 @@ class DataSyncManager:
             tmp_path = local_path.with_suffix(local_path.suffix + ".tmp")
 
             # Try downloading with retries
-            retries = getattr(self, "retries", 3)
+            retries = max(1, getattr(self, "retries", 3))
             retry_backoff = getattr(self, "retry_backoff", 1.0)
             last_exc: Exception | None = None
 
-            for attempt in Retrying(
-                stop=stop_after_attempt(retries), wait=wait_fixed(retry_backoff)
-            ):
+            for attempt in range(1, retries + 1):
                 try:
                     response = requests.get(url, timeout=6)
                     response.raise_for_status()
@@ -83,11 +80,12 @@ class DataSyncManager:
                     break
                 except requests.RequestException as exc:
                     last_exc = exc
-                    wait = retry_backoff * attempt
-                    console.print(
-                        f"[DataSync] Attempt {attempt} failed for {key} ({exc}), retrying in {wait}s"
-                    )
-                    time.sleep(wait)
+                    if attempt < retries:
+                        wait = retry_backoff * attempt
+                        console.print(
+                            f"[DataSync] Attempt {attempt} failed for {key} ({exc}), retrying in {wait}s"
+                        )
+                        time.sleep(wait)
                 except Exception as exc:  # noqa: BLE001
                     last_exc = exc
                     console.print(f"[DataSync] Unexpected error updating {key}: {exc}")
@@ -95,5 +93,5 @@ class DataSyncManager:
 
             if last_exc is not None:
                 console.print(
-                    f"[DataSync] Failed to update {key} after {retries} attempts. Using local {local_path}"
+                    f"[DataSync] Failed to update {key} ({last_exc}). Using local {local_path}"
                 )

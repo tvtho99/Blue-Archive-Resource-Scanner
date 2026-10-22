@@ -1,10 +1,10 @@
 import logging
-from dataclasses import fields
+from dataclasses import MISSING, fields
 from pathlib import Path
 from typing import Any
 
 from src.utils.data.io import read_json, write_json
-from src.utils.data.text_matcher import find_closest
+from src.utils.data.text_matcher import match_scanned
 
 logger = logging.getLogger("BA-Scanner")
 
@@ -26,28 +26,33 @@ class BaseProcessor:
     def process_json(self, raw_data: list[dict]) -> list[Any]:
         if not self.dataclass:
             return []
-        return [self.dataclass(**item) for item in raw_data if self.validate_item(item)]
+        # Unknown keys (e.g. a field added upstream) would make the dataclass raise
+        known = {field.name for field in fields(self.dataclass)}
+        return [
+            self.dataclass(**{k: v for k, v in item.items() if k in known})
+            for item in raw_data
+            if self.validate_item(item)
+        ]
 
     def validate_item(self, item: dict) -> bool:
-        if not self.dataclass:
+        if not self.dataclass or not isinstance(item, dict):
             return False
 
-        try:
-            return all(field.name in item for field in fields(self.dataclass))
-        except (KeyError, TypeError):
-            return False
+        # Fields with a default may be missing
+        return all(
+            field.name in item
+            for field in fields(self.dataclass)
+            if field.default is MISSING and field.default_factory is MISSING
+        )
 
     def save_result(self, result: Any):
         write_json(self.output_file, result)
 
-    def get_closest_value(
-        self, name: str, name_map: dict[str, Any], threshold: float = 0.8
-    ) -> Any:
-        """Helper to match a name against dictionary keys using fuzzy matching."""
-        if not isinstance(name_map, dict) or not name_map:
-            return 0
-        matched = find_closest(name, name_map.keys(), threshold)
-        return name_map.get(matched, 0) if matched else 0
+    def match_owned(self, names: list[str], owned_data: dict) -> dict[str, Any]:
+        """Known name -> scanned value, for the names that were scanned."""
+        if not isinstance(owned_data, dict):
+            return {}
+        return match_scanned(owned_data, names)
 
     def map_data(self, processed_items: list[Any], owned_data: dict) -> Any:
         raise NotImplementedError

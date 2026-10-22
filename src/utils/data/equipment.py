@@ -9,20 +9,24 @@ class EquipmentProcessor(BaseProcessor):
     def __init__(self):
         self.dataclass = Equipment
         self.processed_file = Config.equipment_processed
-        self.owned_file = Config.scanned_counts
+        self.owned_file = Config.scanned_equipment
         self.output_file = Config.final_equipment
 
     def map_data(self, equipment_list: list[Equipment], name_map: dict) -> dict:
+        owned = self.match_owned([item.name for item in equipment_list], name_map)
         grouped = defaultdict(dict)
         for item in equipment_list:
             category = item.category
             key = item.id if category == "Exp" else item.tier
-            # value = name_map.get(item.name, 0)
-            value = self.get_closest_value(item.name, name_map)
+            value = owned.get(item.name, 0)
 
             if "WeaponExpGrowth" in category:
                 icon_key = int(item.icon.split("_")[-1]) + 1
                 grouped[category][icon_key] = value
             else:
+                # A gear piece and its blueprint share (category, tier), the
+                # blueprint is the planner material, whatever the file order
+                if key in grouped[category] and not item.icon.endswith("_piece"):
+                    continue
                 grouped[category][key] = value
         return grouped

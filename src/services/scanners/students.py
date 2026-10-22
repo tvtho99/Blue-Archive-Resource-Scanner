@@ -17,6 +17,10 @@ from src.utils.ocr.extract import extract_from_region
 
 logger = logging.getLogger("BA-Scanner")
 
+# ponytail: hard cap so a first name that never OCRs the same again can't loop
+# forever (~2.7 MB per screenshot); raise it once the roster gets near
+MAX_STUDENTS = 400
+
 
 def get_student_info(
     device: DeviceController,
@@ -38,17 +42,24 @@ def get_student_info(
             image, StudentSearchPattern.STUDENT_NAME.value, mode=ExtractionMode.NAME
         )
 
-        if first_name is None:
+        if not first_name:
+            # An empty read can never match, so the first readable name marks the loop
             first_name = current_name
             logger.info(
                 f"[bold]First student name[/bold] set to: [cyan]{first_name}[/cyan]"
             )
 
-        elif current_name and current_name == first_name:
+        elif current_name == first_name:
             logger.info("Encountered the first student again. Ending capture loop.")
             break
 
         captured_images.append(image)
+        if len(captured_images) >= MAX_STUDENTS:
+            logger.warning(
+                f"Captured {MAX_STUDENTS} students without meeting "
+                f"{first_name!r} again. Ending capture loop."
+            )
+            break
 
         # Tap Next
         device.tap(
@@ -61,6 +72,9 @@ def get_student_info(
             break
 
     results = process_ocr_results(captured_images, ocr_workers)
+    if not results:
+        logger.error("OCR could not read any student name.")
+        return False
 
     logger.info(
         f"[bold yellow]Extracted[/bold yellow] {len(results)} student records. Formatting & saving..."
@@ -71,12 +85,11 @@ def get_student_info(
 
     for r in results:
         name, current_data = map_student_data_to_character(r)
-        if name not in seen_names:
-            seen_names.add(name)
-            final_data["characters"].append({"name": name, "current": current_data})
-        else:
-            # Duplicate hit after loop boundary (rare OCR edge case)
-            break
+        if name in seen_names:
+            # Same page captured twice (a missed NEXT tap) or an empty first read
+            continue
+        seen_names.add(name)
+        final_data["characters"].append({"name": name, "current": current_data})
 
     write_json(Config.scanned_students, final_data)
     logger.info(
@@ -88,10 +101,10 @@ def get_student_info(
     return True
 
 
-def process_ocr_results(captured_images: list, ocr_workers: int) -> dict:
+def process_ocr_results(captured_images: list, ocr_workers: int) -> list[dict]:
     if not captured_images:
         logger.warning("⚠️ No students captured.")
-        return False
+        return []
 
     logger.info(
         f"[bold yellow]Processing[/bold yellow] {len(captured_images)} screenshots with {ocr_workers} OCR workers..."
@@ -99,9 +112,13 @@ def process_ocr_results(captured_images: list, ocr_workers: int) -> dict:
 
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=ocr_workers) as executor:
-        futures = {executor.submit(student_ocr_worker, p): p for p in captured_images}
-        for future in concurrent.futures.as_completed(futures):
-            data = future.result()
+        futures = [executor.submit(student_ocr_worker, p) for p in captured_images]
+        for future in futures:  # Capture order, so roster order survives
+            try:
+                data = future.result()
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"OCR worker failed: {e}")
+                continue
             if data and data.get("Name"):
                 results.append(data)
 
