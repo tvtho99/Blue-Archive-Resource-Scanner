@@ -54,7 +54,9 @@ class ConfigManager:
         self.items_processed = self.DATA_DIR / "items_processed.json"
         self.students_processed = self.DATA_DIR / "students_processed.json"
 
-        self.scanned_counts = self.OWNED_DIR / "scanned_counts.json"
+        # Separate files, or item names get fuzzy-matched against equipment and back
+        self.scanned_equipment = self.OWNED_DIR / "scanned_equipment.json"
+        self.scanned_items = self.OWNED_DIR / "scanned_items.json"
         self.scanned_currencies = self.OWNED_DIR / "scanned_currencies.json"
         self.scanned_students = self.OWNED_DIR / "scanned_students.json"
 

@@ -77,9 +77,8 @@ def test_student_matching(tmp_config):
     with open(processor.output_file) as f:
         result = json.load(f)
 
-    # assert result["characters"][0]["id"] == "S001"
-    print(result["characters"][0]["name"])
-    assert result["characters"][0]["id"] == 10100  # Shiroko Terror ID
+    # Rows without the defaulted hasBondGear/StarGrade fields still count
+    assert result["characters"][0]["id"] == "10100"  # Shiroko Terror ID
     assert result["characters"][0]["current"]["star"] == 5
     assert result["characters"][0]["current"]["ue"] == 2
     assert isinstance(result["characters"][0]["current"]["level"], str)

@@ -2,7 +2,6 @@ import logging
 import time
 
 import numpy as np
-from tenacity import Retrying, retry_if_result, stop_after_attempt, wait_fixed
 
 from src.core.area import Region
 from src.utils.device.interfaces import DeviceController
@@ -18,47 +17,42 @@ def swipe_with_verification(
 ) -> bool:
     """
     Swipe with screenshot verification to ensure it actually scrolled.
+    A swipe the game ignored is retried, so False means the grid is at its end.
     """
 
-    for attempt in Retrying(
-        stop=stop_after_attempt(max_attempts),
-        wait=wait_fixed(2.5),
-        retry=retry_if_result(lambda x: x is False),
-    ):
-        with attempt:
-            # Capture before swipe
-            before = device.capture_screenshot()
-            if before is None:
-                return False
+    # Swipe from 80% down the grid height to 10% down the grid height
+    start_y = grid_region.y + int(grid_region.height * 0.80)
+    end_y = grid_region.y + int(grid_region.height * 0.10)
+    swipe_x = grid_region.x + (grid_region.width // 2)
 
-            before_crop = crop_image(before, grid_region)
-            # Swipe from 80% down the grid height to 10% down the grid height
-            start_y = grid_region.y + int(grid_region.height * 0.80)
-            end_y = grid_region.y + int(grid_region.height * 0.10)
-            swipe_x = grid_region.x + (grid_region.width // 2)
-
-            # Perform swipe
-            device.swipe(swipe_x, start_y, swipe_x, end_y, duration_ms=2000)
-
-            # Wait for animation
-            time.sleep(2.5)
-
-            # Capture after swipe
-            after = device.capture_screenshot()
-            if after is None:
-                return False
-            after_crop = crop_image(after, grid_region)
-
-            # Verify screen changed using full grid region
-            if _screens_are_different(before_crop, after_crop):
-                return True
-
-            logger.warning(
-                f"[bold yellow]Swipe: [/bold yellow] Attempt {attempt.retry_state.attempt_number} failed, retrying..."
-            )
+    for attempt in range(1, max_attempts + 1):
+        # Capture before swipe
+        before = device.capture_screenshot()
+        if before is None:
             return False
 
-    logger.error("Swipe verification failed after all retries.")
+        # Perform swipe
+        device.swipe(swipe_x, start_y, swipe_x, end_y, duration_ms=2000)
+
+        # Wait for animation
+        time.sleep(2.5)
+
+        # Capture after swipe
+        after = device.capture_screenshot()
+        if after is None:
+            return False
+
+        # Verify screen changed using full grid region
+        if _screens_are_different(
+            crop_image(before, grid_region), crop_image(after, grid_region)
+        ):
+            return True
+
+        logger.warning(
+            f"[bold yellow]Swipe: [/bold yellow] Attempt {attempt}/{max_attempts} did not scroll."
+        )
+
+    logger.info("Grid did not scroll after all retries, treating it as the end.")
     return False
 
 

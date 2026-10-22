@@ -210,12 +210,14 @@ class JustinPlannerProcessor:
             if isinstance(c, dict) and "id" in c
         }
 
-        updated_characters: list[dict[str, Any]] = []
         scanned_characters = students_raw.get("characters", [])
 
         for char in scanned_characters:
             original_id = str(char.get("id", ""))
             name = char.get("name", "")
+            if original_id in ("", "N/A"):
+                console.print(f"[yellow]Skipping unmatched student:[/yellow] {name}")
+                continue
 
             # Translate scanner ID to allowed ID
             char_id = self.SITE_ID_MAP.get(original_id, original_id)
@@ -234,7 +236,6 @@ class JustinPlannerProcessor:
                 existing_char = existing_chars_map[char_id]
                 existing_char["current"] = current_stats
                 existing_char["hasBondGear"] = has_bond_gear
-                updated_characters.append(existing_char)
             else:
                 # Add new character
                 new_char = {
@@ -250,9 +251,10 @@ class JustinPlannerProcessor:
                     "enabled": True,
                     "hasBondGear": has_bond_gear,
                 }
-                updated_characters.append(new_char)
+                existing_chars_map[char_id] = new_char
 
-        planner_data["characters"] = updated_characters
+        # Characters this scan missed keep their data, the planner file is a merge
+        planner_data["characters"] = list(existing_chars_map.values())
 
         write_json(self.output_file, planner_data)
         console.print(

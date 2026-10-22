@@ -7,9 +7,9 @@ class ItemProcessor(BaseProcessor):
     def __init__(self):
         self.dataclass = Item
         self.processed_file = Config.items_processed
-        self.owned_file = Config.scanned_counts
+        self.owned_file = Config.scanned_items
         self.output_file = Config.final_items
 
     def map_data(self, items: list[Item], name_map: dict) -> dict:
-        # return {item.id: name_map.get(item.name, 0) for item in items}
-        return {item.id: self.get_closest_value(item.name, name_map) for item in items}
+        owned = self.match_owned([item.name for item in items], name_map)
+        return {item.id: owned.get(item.name, 0) for item in items}

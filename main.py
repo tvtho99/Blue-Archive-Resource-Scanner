@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 import sys
 
 from src.core.config import Config
@@ -15,7 +16,7 @@ from src.utils.sync.data_sync_manager import DataSyncManager
 logger = logging.getLogger("BA-Scanner")
 
 
-def run_post_processing(visited_screens: set[str]):
+def run_post_processing(scanned_screens: set[str]):
     """
     Only runs processors if the corresponding screen
     was actually successfully scanned.
@@ -23,11 +24,11 @@ def run_post_processing(visited_screens: set[str]):
     processor_map = {
         "Equipment": EquipmentProcessor,
         "Items": ItemProcessor,
-        "Students": StudentProcessor,
+        "Student": StudentProcessor,  # The detail pages write scanned_students.json
     }
 
     for screen_name, ProcessorClass in processor_map.items():
-        if screen_name in visited_screens:
+        if screen_name in scanned_screens:
             try:
                 logger.info(f"Post-processing {screen_name} data...")
                 ProcessorClass().process()
@@ -42,6 +43,9 @@ def main():
     )
     args = parser.parse_args()
 
+    # ponytail: templates, screen_config.json and rapidocr/config.yaml (with its
+    # model paths) are relative to the project root, so run from there
+    os.chdir(Config.PROJECT_ROOT)
     Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # Sync Data
@@ -81,13 +85,14 @@ def mainpage(device: DeviceController):
         finished = state.run()
     except DeviceUnavailableError as e:
         logger.error(f"❌ Scan stopped: {e}")
-        run_post_processing(state.visited)  # Screens finished before the stop
-        return
+        finished = False
+    except Exception:  # noqa: BLE001
+        logger.exception("❌ Scan crashed")
+        finished = False
 
-    if finished:
-        run_post_processing(state.visited)
-    else:
+    if not finished:
         logger.warning("⚠️ Matching process failed or was interrupted.")
+    run_post_processing(state.scanned)  # Screens finished before any stop
 
 
 if __name__ == "__main__":

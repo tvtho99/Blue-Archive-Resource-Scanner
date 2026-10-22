@@ -33,3 +33,5 @@ def get_currencies(device: DeviceController) -> bool:
             update_count(owned_currencies_file, currency.name.title(), AP)
         else:
             update_count(owned_currencies_file, currency.name.title(), how_many)
+
+    return True

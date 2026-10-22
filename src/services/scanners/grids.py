@@ -1,4 +1,4 @@
-import concurrent
+import concurrent.futures
 import logging
 import time
 
@@ -8,7 +8,7 @@ import numpy as np
 from src.core.area import Region
 from src.core.config import Config
 from src.services.workers import item_ocr_worker
-from src.utils.data.io import read_json, write_json
+from src.utils.data.io import write_json
 from src.utils.device.interfaces import DeviceController
 from src.utils.device.swipe_utils import swipe_with_verification
 from src.utils.ocr.color_util import retain_colors
@@ -112,15 +112,17 @@ def item_grid(
         time.sleep(1.5 * Config.WAIT_TIME_MULTIPLIER)
 
     results = process_ocr_results(captured_images, grid_type, ocr_workers)
+    if captured_images and not results:
+        logger.error("OCR could not read any item.")
+        return False
 
-    if results:
-        logger.info(
-            f"Found {len(results)} unique items. Writing to {Config.scanned_counts}..."
-        )
-
-        existing = read_json(Config.scanned_counts)
-        existing.update(results)
-        write_json(Config.scanned_counts, existing)
+    # Overwrite: a full scan is the whole inventory, merging kept counts of items
+    # that are gone (and old misreads) forever
+    owned_file = (
+        Config.scanned_equipment if grid_type == "Equipment" else Config.scanned_items
+    )
+    logger.info(f"Found {len(results)} unique items. Writing to {owned_file}...")
+    write_json(owned_file, results)
 
     return True
 
@@ -204,7 +206,7 @@ def process_ocr_results(
                 name, count = result["name"], result["count"]
 
                 if name and count:
-                    parsed = normalize_value(count)
+                    parsed = normalize_value(count, default=None)
 
                     if parsed is None:
                         logger.info(
