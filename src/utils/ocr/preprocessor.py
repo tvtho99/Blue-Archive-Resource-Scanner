@@ -44,7 +44,10 @@ def preprocess_image_for_ocr(image, mode: ExtractionMode = None):
         image, _ = retain_colors(image, hex_colors, tolerance=20)
 
     elif mode == ExtractionMode.UE_LEVEL or mode == ExtractionMode.NAME:
-        image = remove_non_white(image)
+        # Scaling the game picture to 1280x720 blends white text below 255. The small
+        # UE level text needs more slack; names sit on art, keep its near-white out
+        tolerance = 30 if mode == ExtractionMode.UE_LEVEL else 20
+        image = remove_non_white(image, tolerance=tolerance)
 
     # Standardization to Grayscale
     if image.ndim == 3:

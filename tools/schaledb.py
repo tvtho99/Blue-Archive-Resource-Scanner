@@ -6,15 +6,20 @@ import argparse
 import base64
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from rich.console import Console
 
 from src.core.config import Config
-from src.utils.data.io import read_json, write_text
+from src.utils.data.io import read_json, read_user_text, write_text
 from src.utils.sync.data_sync_manager import DataSyncManager
 
 console = Console()
+
+
+def _fail(message: str) -> NoReturn:
+    console.print(f"[bold red]Error:[/bold red] {message}")
+    raise SystemExit(1)
 
 
 class SchaleDBExporter:
@@ -67,39 +72,92 @@ class SchaleDBExporter:
             "lock": lock,
         }
 
-    def process(self, lock: bool = False) -> Path:
-        """Processes final_students.json and exports to the Base64 Schale import format."""
+    def _load_collection(self, path: str | Path) -> dict[str, dict[str, Any]]:
+        """Reads SchaleDB's "Export Collection" text: Base64 JSON keyed by student id."""
+        path = Path(path)
+        try:
+            text = read_user_text(path)
+            collection = json.loads(
+                base64.b64decode("".join(text.split()), validate=True)
+            )
+        except (OSError, ValueError) as e:
+            _fail(f"Could not read SchaleDB collection {path}: {e}")
+        if not isinstance(collection, dict) or not all(
+            isinstance(entry, dict) for entry in collection.values()
+        ):
+            _fail(f'{path} is not a SchaleDB "Export Collection" text.')
+        return collection
+
+    def process(
+        self, lock: bool = False, base_file_path: str | Path | None = None
+    ) -> Path:
+        """
+        Processes final_students.json and exports to the Base64 Schale import format.
+
+        SchaleDB's Import Collection replaces the whole collection, so the export
+        is merged into base_file_path (the user's own export) when given.
+        """
         console.print("[bold yellow]Processing SchaleDB Export...[/bold yellow]")
+
+        base = self._load_collection(base_file_path) if base_file_path else {}
 
         scanned_data = read_json(self.input_file)
         characters = scanned_data.get("characters", [])
 
-        output_data: dict[str, dict[str, Any]] = {}
-
+        scanned: dict[str, dict[str, Any]] = {}
+        unmatched: list[str] = []
         for char in characters:
             char_id = str(char.get("id", ""))
             if not char_id or char_id == "N/A":
+                unmatched.append(str(char.get("name", "?")))
                 continue
+            scanned[char_id] = char.get("current", {})
 
-            current_stats = char.get("current", {})
-            transformed_stats = self.transform_character(current_stats, lock=lock)
+        if unmatched:
+            console.print(
+                f"[yellow]Skipped {len(unmatched)} unmatched (N/A) students:[/yellow] "
+                + ", ".join(unmatched)
+            )
+        if not scanned:
+            _fail(
+                f"No scanned students in {self.input_file}, nothing written. "
+                "Importing an empty file would wipe your SchaleDB collection."
+            )
 
-            output_data[char_id] = transformed_stats
+        # SchaleDB needs both IDs of dual-mode/style characters, a scanned one wins
+        for char_id, paired_id in self.DUAL_ID_MAP.items():
+            if char_id in scanned and paired_id not in scanned:
+                scanned[paired_id] = scanned[char_id]
 
-            # Check if we need to inject the paired ID for dual-mode/style characters
-            paired_id = self.DUAL_ID_MAP.get(char_id)
-            if paired_id and paired_id not in output_data:
-                output_data[paired_id] = transformed_stats
+        output_data = dict(base)
+        for char_id, current_stats in scanned.items():
+            # A student locked in SchaleDB stays locked
+            locked = bool(base.get(char_id, {}).get("lock", False))
+            output_data[char_id] = self.transform_character(current_stats, lock=locked)
+        if lock:
+            for stats in output_data.values():
+                stats["lock"] = True
 
         # Serialize dict to JSON string -> encode bytes -> Base64 string
         json_str = json.dumps(output_data, ensure_ascii=False)
         encoded_output = base64.b64encode(json_str.encode("utf-8")).decode("utf-8")
 
         write_text(self.output_file, encoded_output)
+        kept = len(output_data) - len(scanned)
         console.print(
             f"[bold green]:heavy_check_mark: Successfully exported ({len(output_data)} characters) to SchaleDB import format:[/bold green] \n"
             f"[cyan]{self.output_file}[/cyan]"
         )
+        if base_file_path:
+            console.print(
+                f"{len(scanned)} from the scan, {kept} kept from {base_file_path}."
+            )
+        else:
+            console.print(
+                "[yellow]Warning: SchaleDB's Import Collection replaces your whole collection, "
+                "students missing from this file are removed. To keep them, copy your SchaleDB "
+                '"Export Collection" text into a file and pass it with --file.[/yellow]'
+            )
 
         console.print(
             "Go to [link=https://schaledb.com][cyan]https://schaledb.com[/cyan][/link], open Settings, and scroll down to "
@@ -116,7 +174,14 @@ def main():
         "-l",
         "--lock",
         action="store_true",
-        help="Set the 'lock' field to true for all characters.",
+        help="Set the 'lock' field to true for all characters (otherwise the lock flags from --file are kept).",
+    )
+    parser.add_argument(
+        "-f",
+        "--file",
+        type=str,
+        default=None,
+        help='Path to a text file with your SchaleDB "Export Collection" data to merge into, keeping the students this scan missed.',
     )
 
     parser.add_argument(
@@ -135,7 +200,7 @@ def main():
             console.print(f"[yellow]Online sync warning: {e}[/yellow]")
 
     processor = SchaleDBExporter()
-    processor.process(lock=args.lock)
+    processor.process(lock=args.lock, base_file_path=args.file)
 
 
 if __name__ == "__main__":

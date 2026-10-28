@@ -3,16 +3,22 @@ Usage: python -m tools.justin_planner
 """
 
 import argparse
+import json
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from rich.console import Console
 
 from src.core.config import Config
-from src.utils.data.io import read_json, write_json
+from src.utils.data.io import read_json, read_user_text, write_json
 from src.utils.sync.data_sync_manager import DataSyncManager
 
 console = Console()
+
+
+def _fail(message: str) -> NoReturn:
+    console.print(f"[bold red]Error:[/bold red] {message}")
+    raise SystemExit(1)
 
 
 class JustinPlannerProcessor:
@@ -40,6 +46,35 @@ class JustinPlannerProcessor:
             "WeaponExpGrowthB": "Hammer",
             "WeaponExpGrowthC": "Barrel",
             "WeaponExpGrowthZ": "Needle",
+        }
+
+        # Catalog item ids that Justin's planner reads under its own key (checked
+        # against its JS): EXP reports, Eligma, shop coins, Blueprint Choice Boxes.
+        # Other ids stay numeric, Eleph go to characters[].eleph.
+        # ponytail: fixed ids, a new Choice Box tier stays numeric (ignored by the
+        # planner) until it is added here
+        self.ITEM_KEY_MAP = {
+            "10": "XP_1",  # Novice Activity Report (50 EXP)
+            "11": "XP_2",  # Normal Activity Report (500 EXP)
+            "12": "XP_3",  # Advanced Activity Report (2000 EXP)
+            "13": "XP_4",  # Superior Activity Report (10000 EXP)
+            "23": "Eligma",
+            "7": "RaidToken",  # Total Assault Coin
+            "9": "RareRaidToken",  # Advanced Total Assault Coin
+            "70": "EliminationRaidToken",  # Grand Assault Coin
+            "71": "RareEliminationRaidToken",  # Advanced Grand Assault Coin
+            "8": "ArenaCoin",  # Tactical Challenge Coin
+            "60": "JECoin",  # Joint Firing Drill Coin
+            "61": "BountyCoin",
+            "150028": "Choice_T2",  # T2 Equipment Blueprint Choice Box
+            "150029": "Choice_T3",
+            "150030": "Choice_T4",
+            "150031": "Choice_T5",
+            "150032": "Choice_T6",
+            "150033": "Choice_T7",
+            "150041": "Choice_T8",
+            "150045": "Choice_T9",
+            "150048": "Choice_T10",
         }
 
         self.DEFAULT_TEMPLATE = {
@@ -87,10 +122,55 @@ class JustinPlannerProcessor:
             for key, value in items.items():
                 if category == "Exp":
                     new_key = f"GXP_{key}"
+                elif str(key) == "0":
+                    # Tier 0 is the General blueprint, usable for any tier
+                    new_key = f"G_{transformed_category}"
                 else:
                     new_key = f"T{key}_{transformed_category}"
                 transformed[new_key] = value
         return transformed
+
+    def _transform_items(
+        self, items: dict[str, Any], student_ids: set[str]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """
+        Renames item ids to Justin Planner keys (XP_1, Eligma, Choice_T2...).
+        Eleph (an Eleph's item id is its student's id) are returned apart,
+        the planner keeps them per character.
+        """
+        materials, eleph = {}, {}
+        for item_id, value in items.items():
+            if item_id in student_ids:
+                eleph[item_id] = value
+            else:
+                materials[self.ITEM_KEY_MAP.get(item_id, item_id)] = value
+        return materials, eleph
+
+    def _load_base(
+        self, base_file_path: str | Path | None
+    ) -> tuple[dict[str, Any], str]:
+        """
+        Planner data to merge into and its name for messages: --file, else
+        input/justin_data.json, else the default template when that is missing.
+        """
+        path = Path(base_file_path) if base_file_path else self.input_file
+        if not path.exists():
+            if base_file_path:
+                _fail(f"Justin Planner file not found: {path}")
+            console.print(
+                f"[yellow]No {path} found, using the default template.[/yellow]"
+            )
+            return dict(self.DEFAULT_TEMPLATE), "the default template"
+
+        # Never fall back to the template for a file that is there: importing
+        # the result would replace the user's whole planner
+        try:
+            data = json.loads(read_user_text(path))
+        except (OSError, ValueError) as e:
+            _fail(f"Could not read Justin Planner file {path}: {e}")
+        if not isinstance(data, dict):
+            _fail(f"{path} is not a Justin Planner export (no JSON object).")
+        return data or dict(self.DEFAULT_TEMPLATE), str(path)
 
     def _format_stats(
         self, raw_stats: dict[str, Any], star_grade: int = 1
@@ -190,17 +270,22 @@ class JustinPlannerProcessor:
 
         # Transform materials
         transformed_equipment = self._transform_equipment(equipment_raw)
-        transformed_items = dict(items_raw)
+        transformed_items, eleph_owned = self._transform_items(
+            items_raw, set(student_map)
+        )
         new_materials = {**transformed_equipment, **transformed_items}
 
         # Load base/existing Planner file or default template
-        base_path = base_file_path or self.input_file
-        planner_data = read_json(base_path)
-        if not planner_data:
-            planner_data = dict(self.DEFAULT_TEMPLATE)
+        planner_data, base_name = self._load_base(base_file_path)
 
-        # Merge Owned Materials
-        owned_materials = planner_data.get("owned_materials", {})
+        # Merge Owned Materials. Scanned ids replace the base file's, also what an
+        # older export wrote under keys Justin ignores: numeric ids of items that now
+        # have a Justin key, and T0_{Category} for the General blueprints (now G_)
+        owned_materials = {
+            key: value
+            for key, value in planner_data.get("owned_materials", {}).items()
+            if key not in items_raw and not key.startswith("T0_")
+        }
         planner_data["owned_materials"] = {**owned_materials, **new_materials}
 
         # Merge Character Stats
@@ -209,6 +294,7 @@ class JustinPlannerProcessor:
             for c in planner_data.get("characters", [])
             if isinstance(c, dict) and "id" in c
         }
+        kept_count = len(existing_chars_map)
 
         scanned_characters = students_raw.get("characters", [])
 
@@ -253,8 +339,28 @@ class JustinPlannerProcessor:
                 }
                 existing_chars_map[char_id] = new_char
 
+        # Justin's planner keeps owned Eleph per character, none is invented for it
+        missing_eleph = []
+        for char_id, owned in eleph_owned.items():
+            if char_id in existing_chars_map:
+                eleph = existing_chars_map[char_id].setdefault(
+                    "eleph", dict(self.DEFAULT_ELEPH)
+                )
+                eleph["owned"] = str(owned)
+            elif owned:
+                missing_eleph.append(student_map[char_id].get("name", char_id))
+        if missing_eleph:
+            console.print(
+                "[yellow]Eleph not exported, the student is not in the planner file:[/yellow] "
+                + ", ".join(missing_eleph)
+            )
+
         # Characters this scan missed keep their data, the planner file is a merge
         planner_data["characters"] = list(existing_chars_map.values())
+        console.print(
+            f"Merged into {base_name}: kept {kept_count} existing characters, "
+            f"added {len(existing_chars_map) - kept_count}."
+        )
 
         write_json(self.output_file, planner_data)
         console.print(
@@ -278,7 +384,7 @@ def main():
         "--file",
         type=str,
         default=None,
-        help="Path to an existing Justin Planner export file to merge with. Leave it empty for default path",
+        help="Path to an existing Justin Planner export file to merge with. Leave it empty for default path. Stops with an error if the file can't be read",
     )
     parser.add_argument(
         "-o",

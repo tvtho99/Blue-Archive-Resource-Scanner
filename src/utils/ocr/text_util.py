@@ -44,8 +44,17 @@ def normalize_skill_value(value, max_level: int):
     """
     if isinstance(value, str) and value.strip().upper() == "MAX":
         return max_level
-    # Fallback to normalize_value to handle "Lv.X", plain numbers, etc.
-    return normalize_value(value)
+    # Fallback to level_value to handle "Lv.X", plain numbers, etc.
+    return level_value(value)
+
+
+def level_value(value, default=0):
+    """
+    The N of a "Lv.N" read: its last group of digits, so an "L" OCR'd as 1 can't
+    turn "Lv.50" into 150 ("1v.50." -> 50). Spaces inside a group are OCR gaps.
+    """
+    groups = re.findall(r"\d(?:[\d\s]*\d)?", str(value)) if value is not None else []
+    return int(re.sub(r"\s", "", groups[-1])) if groups else default
 
 
 def normalize_value(value, default=0):
@@ -73,11 +82,30 @@ def normalize_value(value, default=0):
         return default
 
 
-def get_tier_level(text: str) -> str:
-    # Remove everything before and including some '(') + T
-    text = re.sub(r".*?\(?T", "", text)
-    # Remove ")"" and everything after
-    text = re.sub(r"\).*", "", text)
-    match = re.search(r"\d+", text)
+# Letters OCR reads instead of a tier digit
+TIER_LOOKALIKES = str.maketrans(
+    {"B": "3", "O": "0", "o": "0", "S": "5", "l": "1", "I": "1"}
+)
 
-    return match.group(0) if match else None
+
+def get_tier_level(text: str) -> str | None:
+    """
+    Gear tier "1".."10" from an OCR read of its "Tn" label, None if it is not one.
+    OCR may read the T as 7 or 1 ("T9" -> "79", "T10" -> "110") or drop it.
+    """
+    if (text or "").strip() in ("π", "刀"):  # How RapidOCR merges "T7" at 720p
+        return "7"
+    text = re.sub(r"[^0-9A-Za-z]", "", text or "")  # Spaces, brackets, dots
+    has_t = text[:1] in ("T", "t")
+    digits = text[1:] if has_t else text
+    digits = digits.translate(TIER_LOOKALIKES)
+    if not re.fullmatch(r"[0-9]+", digits):
+        return None
+
+    candidates = [digits]
+    if not has_t and digits[0] in "71":
+        candidates.append(digits[1:])  # The T read as a digit
+    for tier in candidates:
+        if tier and tier[0] != "0" and 1 <= int(tier) <= 10:
+            return tier
+    return None

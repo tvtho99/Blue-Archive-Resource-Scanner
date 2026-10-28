@@ -90,6 +90,11 @@ def draw_overlay(image, layout: dict):
 
 
 def main():
+    if Config.settings_error:  # Else a broken settings.json silently means ADB
+        raise SystemExit(
+            "Can't use the settings, fix or delete the file, then run python launch.py "
+            f"or python -m gui.run:\n{Config.settings_error}"
+        )
     device = create_device(Config.settings)
     if not device.connect(Config.ADB_RETRIES):
         raise SystemExit("Could not connect to the device.")

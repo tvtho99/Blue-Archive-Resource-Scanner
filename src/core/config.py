@@ -3,7 +3,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from src.utils.data.io import read_json, write_json
+from src.utils.data.io import write_json
 
 
 class TargetPlatform(str, Enum):
@@ -91,14 +91,21 @@ class ConfigManager:
             folder.mkdir(parents=True, exist_ok=True)
 
     def load_settings(self) -> AppSettings:
+        """
+        Defaults if settings.json is missing or broken. Every module builds
+        Config on import, so a broken file is not raised here: settings_error
+        says why, and main.py refuses to scan with it.
+        """
         path = Path(self.CONFIG_DIR / "settings.json")
+        self.settings_error: str | None = None
 
-        data = read_json(path)
-        if data:
-            try:
-                return AppSettings(**data)
-            except Exception:  # noqa: BLE001, S110
-                pass
+        if not path.exists():
+            return AppSettings()
+        try:
+            # utf-8-sig: Notepad may save a BOM
+            return AppSettings.model_validate_json(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError) as e:  # ValidationError, also for bad JSON
+            self.settings_error = f"{path}: {e}"
         return AppSettings()
 
     def save_settings(self, settings: AppSettings):

@@ -59,8 +59,10 @@ class ScreenNavigator:
         Returns the detected title string (fuzzy matched) or an empty string if not found.
         """
         self._wait(0.5, nav=True)
-        image = self._get_screenshot()
+        return self.screen_in(self._get_screenshot())
 
+    def screen_in(self, image) -> str:
+        """identify_screen on a screenshot taken already."""
         if image is None:
             return ""
 
@@ -81,10 +83,10 @@ class ScreenNavigator:
         return find_closest(text, self.KNOWN_SCREENS)
 
     def _check_asset_in_region(
-        self, region: Region, asset_name: str, threshold: float
+        self, region: Region, asset_name: str, threshold: float, image=None
     ) -> bool:
-        """Generic helper for template matching in a specific region."""
-        img = self._get_screenshot()
+        """Generic helper for template matching in a specific region (of image if given)."""
+        img = self._get_screenshot() if image is None else image
         if img is None:
             return False
 
@@ -93,12 +95,14 @@ class ScreenNavigator:
 
         return find_template_location(crop, asset_path, threshold)
 
-    def at_home(self) -> bool:
+    def at_home(self, image=None) -> bool:
         """
         Check if the user is currently at the home screen by image matching.
         Returns True if the menu button is detected.
         """
-        return self._check_asset_in_region(Home.MENU_REGION, "menu_button", 0.7)
+        return self._check_asset_in_region(
+            Home.MENU_REGION, "menu_button", 0.7, image=image
+        )
 
     def at_page(self) -> bool:
         """

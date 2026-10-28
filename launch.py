@@ -1,5 +1,6 @@
 import argparse
 import json
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -22,6 +23,15 @@ BASE_DIR = Path(__file__).parent
 SETTINGS_FILE = BASE_DIR / "config" / "settings.json"
 SCREEN_CONFIG = BASE_DIR / "config" / "screen_config.json"
 MAIN_ENTRY = BASE_DIR / "main.py"
+
+# main.py runs in its own process group, so a console Ctrl+C reaches only
+# launch.py, which then asks main.py once to stop (main.py takes it as a Ctrl+C)
+if sys.platform == "win32":
+    NEW_PROCESS_GROUP = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    STOP_SIGNAL = signal.CTRL_BREAK_EVENT  # Ctrl+C can't target a process group
+else:
+    NEW_PROCESS_GROUP = {"process_group": 0}
+    STOP_SIGNAL = signal.SIGINT
 
 
 # Helpers
@@ -207,7 +217,8 @@ def run_wizard(previous: dict, debug_mode: bool = False) -> dict:
 
     if mode == TargetPlatform.DESKTOP.value:
         console.print(
-            "[yellow]Tip: Windowed, Screen Ratio 16:9, Display Shortcut Icons OFF, "
+            "[yellow]Tip: Screen Ratio 16:9 (window or fullscreen, any size with a game area "
+            "of at least 1280x720), English game text, Display Shortcut Icons OFF, "
             "no controller connected. Don't touch the mouse while scanning.[/yellow]"
         )
         window_title = ask("Game window title", default=window_title)
@@ -279,6 +290,24 @@ def run_wizard(previous: dict, debug_mode: bool = False) -> dict:
 
 
 # Launch
+def stop_scan(process: subprocess.Popen):
+    """
+    Stop main.py like a Ctrl+C, so it still post-processes the finished screens.
+    It may take a while (an OCR batch or a wait ends first): a second Ctrl+C kills it.
+    """
+    console.print(
+        "[yellow]\nStopping the scan (finished screens are still post-processed)... "
+        "Press Ctrl+C to kill it now instead.[/yellow]"
+    )
+    try:
+        process.send_signal(STOP_SIGNAL)
+        process.wait()
+    except (OSError, KeyboardInterrupt):  # No console to signal, or a second Ctrl+C
+        console.print("[red]Killing the scan, finished screens were not post-processed.[/red]")
+        process.terminate()
+        process.wait()
+
+
 def launch(settings: dict):
     """Launch the scanner with given settings."""
 
@@ -294,6 +323,8 @@ def launch(settings: dict):
     cmd = [sys.executable, str(MAIN_ENTRY)]
     if not settings.get("enable_sync", False):
         cmd.append("--offline")
+    if settings.get("debug_mode", False):
+        cmd.append("--debug")  # main.py reads settings.json, not this run's flag
 
     stop_event = Event()
 
@@ -307,12 +338,11 @@ def launch(settings: dict):
 
     try:
         # subprocess.run(cmd, check=True)
-        process = subprocess.Popen(cmd)
+        process = subprocess.Popen(cmd, **NEW_PROCESS_GROUP)
 
         while process.poll() is None:
             if stop_event.is_set():
-                console.print("[yellow]\nScan interrupted.[/yellow]")
-                process.terminate()
+                stop_scan(process)
                 break
 
             stop_event.wait(0.1)
@@ -320,9 +350,7 @@ def launch(settings: dict):
         process.wait()
 
     except KeyboardInterrupt:
-        console.print("[yellow]\nScan interrupted.[/yellow]")
-        process.terminate()
-        process.wait()
+        stop_scan(process)
 
     except subprocess.CalledProcessError as e:
         console.print("[red]\nScanner crashed. Check logs.[/red]")
@@ -335,6 +363,11 @@ def launch(settings: dict):
 
 # Entry
 def main():
+    # "python launch.py > log.txt" writes in the ANSI code page, which has no ✓ or ▶
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+
     console.print(
         Panel(
             "[bold cyan]Blue Archive Resource Scanner[/bold cyan]",

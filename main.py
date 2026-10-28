@@ -1,9 +1,10 @@
 import argparse
 import logging
 import os
+import signal
 import sys
 
-from src.core.config import Config
+from src.core.config import Config, TargetPlatform
 from src.core.navigator import ScreenNavigator
 from src.core.state import ScreenState
 from src.utils.data.equipment import EquipmentProcessor
@@ -36,12 +37,60 @@ def run_post_processing(scanned_screens: set[str]):
                 logger.error(f"Failed to process {screen_name}: {e}")
 
 
+def post_process_finished(scanned_screens: set[str]):
+    """run_post_processing that a second Ctrl+C/F2 can't cut short halfway."""
+    stops = [signal.SIGINT] + ([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else [])
+    previous = {sig: signal.signal(sig, signal.SIG_IGN) for sig in stops}
+    try:
+        run_post_processing(scanned_screens)
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
 def main():
+    # "python main.py > log.txt" writes in the ANSI code page, which has no ✔ or ▶
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+
+    # launch.py stops a scan with CTRL_BREAK_EVENT (F2): treat it like a Ctrl+C,
+    # so the screens finished so far are still post-processed
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, signal.default_int_handler)
+
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--offline", action="store_true", help="Skip data sync and any network calls"
     )
+    parser.add_argument(
+        "--debug", action="store_true", help="Enable debug mode for this run."
+    )
     args = parser.parse_args()
+
+    if Config.settings_error:
+        print(
+            "Can't use the settings, fix or delete the file, "
+            "then run python launch.py or python -m gui.run:"
+        )
+        print(Config.settings_error)
+        sys.exit(1)
+    settings = Config.settings
+    if not (Config.CONFIG_DIR / "settings.json").exists():
+        print(
+            "Warning: config/settings.json not found, using the defaults. "
+            "Run python launch.py or python -m gui.run to set up the scan."
+        )
+    if settings.target_platform == TargetPlatform.DESKTOP:
+        print(f"Platform: PC client, window '{settings.window_title}'")
+    else:
+        print(
+            f"Platform: {settings.target_platform.value} over ADB "
+            f"{settings.adb_host}:{settings.adb_port}"
+        )
+
+    if args.debug:
+        Config.DEBUG = True  # Before ScreenState sets the log level from it
 
     # ponytail: templates, screen_config.json and rapidocr/config.yaml (with its
     # model paths) are relative to the project root, so run from there
@@ -83,6 +132,10 @@ def mainpage(device: DeviceController):
 
     try:
         finished = state.run()
+    except KeyboardInterrupt:  # Ctrl+C, or F2 in launch.py
+        logger.warning("Scan stopped by user.")
+        post_process_finished(state.scanned)  # Screens finished before the stop
+        sys.exit(130)  # The usual exit code after a Ctrl+C
     except DeviceUnavailableError as e:
         logger.error(f"❌ Scan stopped: {e}")
         finished = False
@@ -92,7 +145,7 @@ def mainpage(device: DeviceController):
 
     if not finished:
         logger.warning("⚠️ Matching process failed or was interrupted.")
-    run_post_processing(state.scanned)  # Screens finished before any stop
+    post_process_finished(state.scanned)  # Screens finished before any stop
 
 
 if __name__ == "__main__":
