@@ -8,7 +8,7 @@
 
 A Python-based tool to scan and count owned resources in **Blue Archive**.
 
-**Resolution**: Only supports 1280x720 resolution.
+**Resolution**: Emulators and devices: 1280x720 only. PC client (Steam): any window size with a 16:9 game picture of at least 1280x720.
 
 > **TL;DR:** The scanner automates navigation through the game's menus to collect information that is already visible on screen. It uses screenshots and OCR to read that information and does not modify the game, memory, files, or network traffic, nor does it automate gameplay.
 
@@ -79,7 +79,7 @@ Please refer to the respective repositories and websites for their own licensing
 
 To use the Blue Archive Resources Scanner, ensure you have the following installed:
 
-- **Python** (I use v3.13, but version 3.8 or higher should work fine)
+- **Python** 3.13 or higher
 - **Virtual Environment** (highly recommended)
 
 ---
@@ -95,17 +95,20 @@ To use the Blue Archive Resources Scanner, ensure you have the following install
 
    (You can skip this if you want)
 
-   1b. Create & activate a virtual environment:
+2. Create the virtual environment and install the required packages with [uv](https://docs.astral.sh/uv/):
 
    ```bash
-   uv venv --python 3.13.0
+   uv sync
    .venv\Scripts\activate  # Windows
    source .venv/bin/activate  # macOS/Linux
    ```
 
-2. Install the required Python packages (please use venv or something similar):
+   Without uv, use the standard library instead (a uv venv has no `pip`, so don't mix the two):
+
    ```bash
-   pip install -r requirements.txt
+   python -m venv .venv
+   .venv\Scripts\activate  # Windows
+   python -m pip install -r requirements.txt
    ```
 
 ---
@@ -156,18 +159,38 @@ Once started, the scanner automatically navigates the game, captures screenshots
 
 #### PC Client (Steam)
 
-Choose **PC client / desktop window** in the wizard. The scanner finds the window titled `Blue Archive`, captures its game area, and scales it to 1280x720, so any 16:9 window size works.
+Choose **PC client / desktop window** in the wizard. The scanner finds the window titled `Blue Archive` and detects its size on every screenshot. It finds the 16:9 game picture inside the window, skipping the black bars the game draws when the window or monitor is not 16:9 (for example fullscreen on a 16:10 laptop or an ultrawide monitor), and scales it to 1280x720.
+
+**Window size:** any size works as long as the 16:9 game picture is at least **1280x720**. Bigger is fine. Sizes that scale exactly (1280x720, 2560x1440, 3840x2160) give the cleanest OCR. If the picture is smaller, or the window is not 16:9 and has no black bars, the scan pauses, tells you what to change, and continues by itself once the window is fixed. It stops after 60 seconds.
 
 In the game options:
 
-- **Screen Mode**: Window (or fullscreen on a 16:9 monitor).
+- **Screen Mode**: Window or Fullscreen.
 - **Screen Ratio**: 16:9.
+- **Language**: English. The scanner reads page titles and item names in English only.
 - **Display Shortcut Icons**: Off. The key badges cover text the scanner reads.
 - Disconnect controllers. The game ignores the mouse while one is connected.
+- Turn off Steam overlay notifications while scanning. They are drawn into the game picture and can cover items.
 
-While scanning, the scanner moves your real mouse, so don't touch it. Keep the game window visible. Press F2 to stop a scan started with `launch.py`. If clicks do nothing, make sure the game and the scanner run at the same permission level (both as a normal user, or both as administrator).
+While scanning, the scanner moves your real mouse, so don't touch it. Keep the whole game window on screen. If clicks do nothing, make sure the game and the scanner run at the same permission level (both as a normal user, or both as administrator).
+
+To stop a scan, press **F2** (scans started with `launch.py`) or **Ctrl+C** in the terminal. Screens that finished before the stop are still processed, which can take a few seconds. Pressing Ctrl+C again while `launch.py` waits kills the scan at once, without processing. Moving the mouse into a screen corner also stops the scan (pyautogui failsafe).
 
 > **Warning:** The Steam client ships Nexon Game Security, a kernel-level anti-cheat, and the Blue Archive Terms of Service prohibit macros and automated data collection. Using the scanner on PC may put your account at risk. Use it at your own discretion.
+
+#### Read-only Mode (no clicks)
+
+The normal scan moves your mouse to go through the menus, which is what makes it a macro. In read-only mode you go through the game yourself and the scanner only takes screenshots and reads them. It never clicks, drags, presses keys in the game, or focuses the game window:
+
+```bash
+python -m tools.manual_scan
+```
+
+- **Lobby**: AP, Credits and Pyroxene are read when the lobby shows.
+- **Equipment / Items**: click the items one by one and scroll yourself. Keep each item's details on screen for about a second; the console counts every item it captured.
+- **Students**: open a student's page and go through your students with the next arrow, about a second per student.
+
+Press **F2** (or Ctrl+C in the terminal) when done. Everything captured is read, saved and post-processed, so the exporters work as after a normal scan. The results are merged into `output/owned/`: items and students you didn't look at keep their earlier values, including items you have used up since (a normal scan replaces the whole file). It works for the PC client and for emulators.
 
 #### Checking the Layout
 
@@ -183,7 +206,7 @@ Navigate the game by hand, then type the screen you are on (`home`, `menu`, `equ
 
 After a successful scan, check the `output/` folder:
 
-- `owned/scanned_equipment.json`, `owned/scanned_items.json` -> Raw equipment & item counts, replaced on every scan of that screen.
+- `owned/scanned_equipment.json`, `owned/scanned_items.json` -> Raw equipment & item counts, replaced on every complete scan of that screen. A scan that could not finish (no slots found, the grid would not scroll, a stop) keeps the previous file.
 - `owned/scanned_students.json` -> Raw student stats
 - `owned/scanned_currencies.json` -> AP, Credits, Pyroxene
 - `equipment_final_values.json`, `items_final_values.json`, `students_final_values.json` -> Processed & mapped data ready for planning
@@ -215,13 +238,15 @@ If you already have a Justin163 Planner export and want to merge it with the con
    python -m tools.justin_planner
    ```
 
-The exporter will automatically use `input/justin_data.json` when available.
+The exporter will automatically use `input/justin_data.json` when available, and starts from an empty template only when that file does not exist. A file that exists but can't be read stops the exporter with an error, because importing a template-based result would replace your whole planner.
 
-Alternatively, you can specify a different Justin Planner export using the `--file` option:
+Alternatively, you can specify a different Justin Planner export using the `--file` option (the exporter stops with an error if that file is missing or unreadable):
 
 ```bash
 python -m tools.justin_planner --file path/to/justin_data.json
 ```
+
+Scanned Activity Reports, Eligma, Equipment Blueprint Choice Boxes and General blueprints are written under the planner's own keys, and each student's Eleph goes to that character's owned Eleph.
 
 #### Optional Arguments
 
@@ -280,14 +305,17 @@ python -m tools.schaledb
 
 The exporter will generate the Schale DB import data after processing your scanned data.
 
+> **Note:** Schale DB's Import Collection **replaces** your whole collection. To keep students the scan missed, copy your Schale DB "Export Collection" text into a file and pass it with `--file`: the scan is merged into it. The exporter refuses to write a file without any scanned student.
+
 #### Optional Arguments
 
 The exporter supports the following options:
 
-| Option           | Description                                                      |
-| ---------------- | ---------------------------------------------------------------- |
-| `-l`, `--lock`   | Set the `lock` field to **true** for all characters.             |
-| `-o`, `--online` | Download the latest community-maintained data before processing. |
+| Option                | Description                                                                                            |
+| --------------------- | ------------------------------------------------------------------------------------------------------ |
+| `-l`, `--lock`        | Set the `lock` field to **true** for all characters (otherwise the lock flags from `--file` are kept). |
+| `-f`, `--file <path>` | Text file with your Schale DB "Export Collection" data to merge the scan into.                         |
+| `-o`, `--online`      | Download the latest community-maintained data before processing.                                       |
 
 For example, to mark all characters as locked:
 

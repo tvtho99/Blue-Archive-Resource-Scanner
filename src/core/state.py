@@ -16,6 +16,7 @@ from rich.progress import (
 )
 from tenacity import (
     retry,
+    retry_if_exception_type,
     retry_if_not_exception_type,
     stop_after_attempt,
     wait_fixed,
@@ -114,7 +115,9 @@ class ScreenState:
         return enabled_screens
 
     @retry(
-        retry=retry_if_not_exception_type(DeviceUnavailableError),
+        # tenacity catches BaseException: a Ctrl+C must stop the scan, not be retried
+        retry=retry_if_exception_type(Exception)
+        & retry_if_not_exception_type(DeviceUnavailableError),
         stop=stop_after_attempt(3),
         wait=wait_fixed(2),
         before_sleep=lambda rs: logging.getLogger("BA-Scanner").warning(
@@ -182,8 +185,17 @@ class ScreenState:
             )
             # Identify what screen we are currently sitting on
             detected = self.navigator.identify_screen()
-            if not detected and self.navigator.at_home():
-                detected = "Currencies"
+            if not detected:
+                # The lobby, or a page HOME leaves. Else stop: the scan would only
+                # tap fixed spots blindly for minutes
+                if not self.navigator.ensure_at_home().success:
+                    raise DeviceUnavailableError(
+                        "Couldn't find the Blue Archive lobby or a scanner page. "
+                        "Check: the game shows its lobby, game text is English, "
+                        "the game area lines up (python -m tools.capture_layout), "
+                        "Display Shortcut Icons is off."
+                    )
+                detected = "Currencies"  # The lobby shows the currencies
 
             # If current screen is enabled in config, set as target immediately
             if detected and detected in self.config:
@@ -247,7 +259,14 @@ class ScreenState:
                         task_id,
                         description=f"[bold blue]Going Home[/bold blue] for {self.target_screen}...",
                     )
-                    self.navigator.ensure_at_home()
+                    # Else the currencies are read from (or STUDENTS is tapped on)
+                    # whatever is shown. Stop: every later screen starts from the
+                    # lobby too, abandoning would tap HOME blindly once per screen
+                    if not self.navigator.ensure_at_home().success:
+                        raise DeviceUnavailableError(
+                            "Couldn't get back to the Blue Archive lobby (a popup the "
+                            "HOME button can't close?). Close it and start the scan again."
+                        )
                     self.navigator.ensure_menu_state(should_open=False)
                     time.sleep(
                         2
@@ -332,7 +351,7 @@ class ScreenState:
         Execute the loop until completion or failure.
 
         Returns:
-            bool: True if all screens processed, False otherwise.
+            bool: True if every screen it visited was scanned, False otherwise.
         """
 
         with Progress(
@@ -350,6 +369,14 @@ class ScreenState:
             while self.current_state not in (NavState.COMPLETED, NavState.FAILED):
                 self.current_state = self._transition(progress, task_id)
                 time.sleep(0.1)  # Yield slightly to avoid tight loops
+
+        # Abandoned screens count as visited; skip_if_visited skips never do
+        missed = [s for s in self.config if s in self.visited - self.scanned]
+        if self.current_state == NavState.COMPLETED and missed:
+            self.console.print(
+                f"[bold red]✘ Not scanned: {', '.join(missed)}[/bold red]"
+            )
+            return False
 
         if self.current_state == NavState.COMPLETED:
             self.console.print(

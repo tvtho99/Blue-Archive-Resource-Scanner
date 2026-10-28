@@ -1,6 +1,6 @@
 import re
 
-from src.utils.ocr.text_util import normalize_skill_value, normalize_value
+from src.utils.ocr.text_util import level_value, normalize_skill_value, normalize_value
 
 
 def map_student_data_to_character(student_data):
@@ -14,7 +14,7 @@ def map_student_data_to_character(student_data):
     name = student_data.get("Name", "Unknown")
 
     current_data = {
-        "level": normalize_value(student_data.get("Level", 1)),
+        "level": level_value(student_data.get("Level", 1)),
         "bond": normalize_value(student_data.get("Bond Level", 1)),
         "ex": normalize_skill_value(student_data.get("Skill EX", 1), 5),
         "basic": normalize_skill_value(student_data.get("Skill Basic", 1), 10),
@@ -24,7 +24,7 @@ def map_student_data_to_character(student_data):
         "gear2": normalize_value(student_data.get("Gear 2 Tier", 1)),
         "gear3": normalize_value(student_data.get("Gear 3 Tier", 1)),
         "gear_bond": normalize_value(student_data.get("Gear Bond Tier", 0)),
-        "ue_level": normalize_value(student_data.get("Unique Equipment Level", 0)),
+        "ue_level": level_value(student_data.get("Unique Equipment Level", 0)),
         "ue": normalize_value(student_data.get("Unique Equipment Star Quantity", 1)),
         "star": normalize_value(student_data.get("Rarity", 1)),
         "talent_atk": normalize_value(student_data.get("Talent_ATK", 0)),

@@ -17,10 +17,22 @@ def read_json(path: PathLike) -> dict:
         return {}
 
     try:
-        with open(p, "r", encoding="utf-8") as f:
+        # utf-8-sig also reads files saved with a BOM (PowerShell, Notepad)
+        with open(p, "r", encoding="utf-8-sig") as f:
             return json.load(f)
     except (json.JSONDecodeError, UnicodeDecodeError, OSError):
         return {}
+
+
+def read_user_text(path: PathLike) -> str:
+    """
+    A text file the user saved by hand: UTF-16 with a BOM (Windows PowerShell 5.1
+    "> file"), else UTF-8 with or without a BOM. Raises OSError/UnicodeDecodeError.
+    """
+    raw = _to_path(path).read_bytes()
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return raw.decode("utf-16")
+    return raw.decode("utf-8-sig")
 
 
 def write_json(path: PathLike, data: Any) -> None:

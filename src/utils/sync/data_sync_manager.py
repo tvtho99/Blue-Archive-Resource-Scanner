@@ -1,11 +1,15 @@
 import time
 from pathlib import Path
+from typing import Any
 
 import requests
 from rich.console import Console
 
 from src.core.config import Config
+from src.utils.data.equipment import EquipmentProcessor
 from src.utils.data.io import read_json, write_json
+from src.utils.data.item import ItemProcessor
+from src.utils.data.student import StudentProcessor
 
 console = Console()
 
@@ -32,8 +36,27 @@ class DataSyncManager:
             "items": Config.items_processed,
             "students": Config.students_processed,
         }
+        # The processor that reads each file, a download must have its shape
+        self.processors = {
+            "equipment": EquipmentProcessor,
+            "items": ItemProcessor,
+            "students": StudentProcessor,
+        }
         self.retries: int = Config.settings.adb_retries
         self.retry_backoff: float = 1.0
+
+    def _rejection(self, key: str, remote_data: Any, local_data: Any) -> str | None:
+        """Why a downloaded file must not replace the local one, None if it may."""
+        if not isinstance(remote_data, list) or not remote_data:
+            return "not a non-empty list"
+        # ponytail: checks that the required fields are there, not their types
+        processor = self.processors[key]()
+        valid = sum(1 for record in remote_data if processor.validate_item(record))
+        if valid < 0.9 * len(remote_data):
+            return f"only {valid} of {len(remote_data)} records have the expected fields"
+        if isinstance(local_data, list) and len(remote_data) < 0.5 * len(local_data):
+            return f"{len(remote_data)} records, the local file has {len(local_data)}"
+        return None
 
     def update_from_online(self):
         """
@@ -66,8 +89,16 @@ class DataSyncManager:
 
                     local_data = read_json(local_path)
 
+                    # An upstream format change or a cut-off file would quietly
+                    # turn every post-processed result empty or N/A
+                    rejection = self._rejection(key, remote_data, local_data)
+                    if rejection:
+                        console.print(
+                            f"[yellow][DataSync] Ignoring the downloaded {key} ({rejection}). "
+                            f"Keeping local {local_path}[/yellow]"
+                        )
                     # Compare and write atomically if different
-                    if local_data == remote_data:
+                    elif local_data == remote_data:
                         console.print(
                             f"[bold blue][DataSync][/bold blue] Local {key} is up to date."
                         )

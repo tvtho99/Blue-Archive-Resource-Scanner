@@ -18,6 +18,7 @@ from src.utils.device.interfaces import DeviceUnavailableError
 logger = logging.getLogger("BA-Scanner")
 
 BASE_RES = Size(1280, 720)
+MIN_GAME_AREA = Size(1280, 720)  # Smaller pictures get upscaled, OCR misreads them
 UNITY_WINDOW_CLASS = "UnityWndClass"
 DWMWA_EXTENDED_FRAME_BOUNDS = 9
 DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
@@ -81,8 +82,44 @@ def crop_to_client(image: np.ndarray, frame: Region, client: Region) -> np.ndarr
     return crop
 
 
+def game_area(width: int, height: int) -> Region:
+    """
+    Where the game draws its 16:9 picture in a client area of this size,
+    relative to the client: the largest centred 16:9 rectangle. Unity fills
+    the rest with black bars.
+    """
+    aspect = BASE_RES.width / BASE_RES.height
+    # ponytail: within 1% of 16:9 the whole client is the picture, so thin bars
+    # there squash it by up to 1% instead of failing the black-bar check
+    if abs(width / height / aspect - 1) <= 0.01:
+        return Region(0, 0, width, height)
+    if width / height > aspect:  # Bars left and right
+        w = round(height * aspect)
+        return Region((width - w) // 2, 0, w, height)
+    h = round(width / aspect)
+    return Region(0, (height - h) // 2, width, h)
+
+
+def bars_are_black(image: np.ndarray, area: Region) -> bool:
+    """True if the capture is black outside the game picture, i.e. letterboxed."""
+    # The 2 px next to the picture don't count: the game may centre it a pixel
+    # off from game_area, and on thin bars one bright line is over the 2% allowance
+    edge = 2
+    middle = image[area.y : area.bottom]
+    bars = [
+        image[: max(area.y - edge, 0)],
+        image[area.bottom + edge :],
+        middle[:, : max(area.x - edge, 0)],
+        middle[:, area.right + edge :],
+    ]
+    # Unity draws pure black, leave room for capture noise and a stray pixel or two
+    dark = sum(np.count_nonzero(np.all(bar <= 24, axis=-1)) for bar in bars)
+    total = sum(bar.shape[0] * bar.shape[1] for bar in bars)
+    return total == 0 or dark >= 0.98 * total
+
+
 def to_base_resolution(image: np.ndarray) -> np.ndarray:
-    """Scale a client-area capture to the 1280x720 every search region is measured in."""
+    """Scale the game picture to the 1280x720 every search region is measured in."""
     h, w = image.shape[:2]
     if (w, h) == (BASE_RES.width, BASE_RES.height):
         return image
@@ -93,8 +130,9 @@ def to_base_resolution(image: np.ndarray) -> np.ndarray:
 
 
 class WindowManager:
-    def __init__(self, window_name: str):
+    def __init__(self, window_name: str, allow_focus: bool = True):
         self.window_name = window_name
+        self.allow_focus = allow_focus  # False: never restore or focus the window
         self.hwnd = find_game_window(window_name)
         self.window_class = win32gui.GetClassName(self.hwnd)
 
@@ -129,7 +167,7 @@ class WindowManager:
             time.sleep(0.2)
 
     def get_client_region(self) -> Region:
-        """The game area (client area) of the window, in screen coordinates."""
+        """The client area of the window (game picture plus any bars), in screen coordinates."""
         self._ensure_window()
         if win32gui.IsIconic(self.hwnd):
             raise RuntimeError(f"'{self.window_name}' is minimized.")
@@ -203,7 +241,10 @@ class WindowManager:
 
     def _capture_mss(self) -> np.ndarray:
         """Grabs screen pixels, so the game window has to be on top."""
-        self.activate()
+        if self.allow_focus:
+            self.activate()
+        elif win32gui.GetForegroundWindow() != self.hwnd:
+            raise RuntimeError(f"'{self.window_name}' is not in front, can't grab it.")
         reg = self.get_client_region()
         with mss.mss() as sct:
             monitor = {
@@ -215,12 +256,15 @@ class WindowManager:
             return np.array(sct.grab(monitor))[:, :, :3]
 
     def scale_coords(self, x: int, y: int):
-        """Translates 1280x720 relative coords to absolute screen coords."""
-        client_region = self.get_client_region()
-        scale_x = client_region.width / BASE_RES.width
-        scale_y = client_region.height / BASE_RES.height
-        return int(client_region.x + (x * scale_x)), int(
-            client_region.y + (y * scale_y)
+        """
+        Translates 1280x720 coords to absolute screen coords inside the game
+        picture, found the same way as for the capture (game_area).
+        """
+        client = self.get_client_region()
+        area = game_area(client.width, client.height)
+        return (
+            int(client.x + area.x + x * area.width / BASE_RES.width),
+            int(client.y + area.y + y * area.height / BASE_RES.height),
         )
 
     def owns_point(self, x: int, y: int) -> bool:

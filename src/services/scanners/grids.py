@@ -10,7 +10,7 @@ from src.core.config import Config
 from src.services.workers import item_ocr_worker
 from src.utils.data.io import write_json
 from src.utils.device.interfaces import DeviceController
-from src.utils.device.swipe_utils import swipe_with_verification
+from src.utils.device.swipe_utils import scroll_to_top, swipe_with_verification
 from src.utils.ocr.color_util import retain_colors
 from src.utils.ocr.extract import crop_image
 from src.utils.ocr.item_util import is_empty_slot
@@ -20,6 +20,9 @@ logger = logging.getLogger("BA-Scanner")
 
 EQUIPMENT_GRID = Region(x=660, y=150, width=572, height=530)
 ITEMS_GRID = Region(x=663, y=150, width=573, height=450)
+
+# ponytail: 300 pages of 10+ new items is 3000+ items, a grid that keeps "moving" fails instead
+MAX_PAGES = 300
 
 
 def item_grid(
@@ -46,7 +49,7 @@ def item_grid(
 
     Termination:
       - First empty slot hit (items are contiguous, so empty = tail end)
-      - swipe_with_verification returns False (no scroll = truly at end)
+      - swipe_with_verification returns False (the end of the grid, confirmed)
 
     Args:
         device (DeviceController): Platform-agnostic device controller
@@ -54,16 +57,25 @@ def item_grid(
         ocr_workers (int, optional): How many cpu to use. Defaults to max(1, (os.cpu_count() or 4) - 1).
 
     Returns:
-        bool: returns True if the process is completed, False otherwise.
+        bool: True if the whole grid was scanned and written, False otherwise
+        (the previous results are kept).
+
+    Raises:
+        RuntimeError: Scrolling or a capture failed mid-grid (the previous results are kept).
     """
 
     grid_region = EQUIPMENT_GRID if grid_type == "Equipment" else ITEMS_GRID
+    no_slots = (
+        f"No item slots found on the {grid_type} grid, the layout does not line up; "
+        "previous results kept. Check the game area with python -m tools.capture_layout."
+    )
+
+    # The page may be scrolled down already (INIT skips navigation when on it)
+    scroll_to_top(device, grid_region)
 
     captured_images: list[np.ndarray] = []
-    screen_number = 0
 
-    while True:
-        screen_number += 1
+    for screen_number in range(1, MAX_PAGES + 1):
         image = device.capture_screenshot()
 
         if image is None:
@@ -78,6 +90,9 @@ def item_grid(
         found_empty: bool = False
 
         valid_regions = process_grid(grid, grid_region)
+        if not valid_regions:
+            logger.error(no_slots)
+            return False
 
         for i, region in enumerate(valid_regions):
             # if Config.DEBUG and i != 0:
@@ -96,7 +111,10 @@ def item_grid(
             detail_img = device.capture_screenshot()
 
             if detail_img is None:
-                continue
+                # Skipping it would save the inventory without this item
+                raise RuntimeError(
+                    "Failed to capture an item's details, previous results kept"
+                )
             captured_images.append(detail_img)
             # save_name = f"s_{screen_number}_item_{i}.png"
             # save_path = tmp_path / save_name
@@ -106,13 +124,21 @@ def item_grid(
         # Stop entirely if an empty slot was hit - no point swiping
         if found_empty:
             break
-        # Swipe
+        # Swipe, False = end of the grid (RuntimeError if that can't be told)
         if not swipe_with_verification(device=device, grid_region=grid_region):
             break
         time.sleep(1.5 * Config.WAIT_TIME_MULTIPLIER)
+    else:
+        raise RuntimeError(
+            f"{grid_type} grid still scrolling after {MAX_PAGES} pages, previous results kept"
+        )
+
+    if not captured_images:
+        logger.error(no_slots)
+        return False
 
     results = process_ocr_results(captured_images, grid_type, ocr_workers)
-    if captured_images and not results:
+    if not results:
         logger.error("OCR could not read any item.")
         return False
 
@@ -194,7 +220,8 @@ def process_ocr_results(
         f"\nProcessing {len(captured_images)} images with {ocr_workers} OCR workers..."
     )
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=ocr_workers) as executor:
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=ocr_workers)
+    try:
         futures = {
             executor.submit(item_ocr_worker, img, grid_type): idx
             for idx, img in enumerate(captured_images)
@@ -218,5 +245,10 @@ def process_ocr_results(
                     results[name] = parsed
             except Exception as e:  # noqa: BLE001
                 logger.error(f"OCR worker failed: {e}")
+    except BaseException:
+        # A Ctrl+C/F2 must not wait for every queued item to be OCR'd
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    executor.shutdown()
 
     return results

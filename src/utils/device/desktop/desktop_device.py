@@ -4,9 +4,11 @@ import time
 from src.utils.device.interfaces import DeviceController, DeviceUnavailableError
 
 from .window_manager import (
-    BASE_RES,
     FOCUS_WAIT_S,
+    MIN_GAME_AREA,
     WindowManager,
+    bars_are_black,
+    game_area,
     set_dpi_awareness,
     to_base_resolution,
 )
@@ -17,58 +19,116 @@ import pyautogui  # noqa: E402
 
 pyautogui.FAILSAFE = True  # Mouse into a screen corner = emergency stop
 FAILSAFE_MSG = "Mouse moved to a screen corner (pyautogui failsafe)."
+SETTLE_S = 2  # After a wait, a fixed window must pass twice this far apart
 
 logger = logging.getLogger("BA-Scanner")
 
 
 class DesktopDevice(DeviceController):
-    def __init__(self, window_name="Blue Archive"):
+    def __init__(self, window_name="Blue Archive", read_only=False):
         self.window_name = window_name
+        # read_only: screenshots only, never a click, a drag or a focus change
+        self.read_only = read_only
         self.wm: WindowManager | None = None
-        self._size_checked = False
+        self._client_size = None  # Window size of the last capture
+        self._bars_ok = False  # Its bars were checked black, see _find_game_area
 
     def connect(self, retries=0):
         """Find the game window, there is nothing else to connect to."""
         try:
-            self.wm = WindowManager(self.window_name)
+            self.wm = WindowManager(self.window_name, allow_focus=not self.read_only)
         except RuntimeError as e:
             logger.error(e)
             return False
         return True
 
     def capture_screenshot(self):
-        try:
-            image = self.wm.get_screenshot()
-        except DeviceUnavailableError:
-            raise  # Game gone or never focused: stop rather than scan blank data
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"Screenshot of '{self.window_name}' failed: {e}")
-            return None
+        """
+        The game picture scaled to 1280x720, or None if the capture failed.
+        While the window can't be scanned (too small, not letterboxed) asks the
+        user to fix it and re-captures about every second, raising
+        DeviceUnavailableError if it isn't fixed within FOCUS_WAIT_S.
+        """
+        deadline = None  # Set while waiting for the user to fix the window
+        shown = None  # The instruction last logged
+        passed = None  # Window size that passed once since the wait began
+        while True:
+            try:
+                image = self.wm.get_screenshot()
+            except DeviceUnavailableError:
+                raise  # Game gone or never focused: stop rather than scan blank data
+            except Exception as e:  # noqa: BLE001
+                if deadline is None:
+                    logger.error(f"Screenshot of '{self.window_name}' failed: {e}")
+                    return None
+                # The user may be resizing it or switching the screen mode
+                logger.debug(f"Screenshot of '{self.window_name}' failed while waiting: {e}")
+                image = None
 
-        self._check_window_size(image)
-        return to_base_resolution(image)
+            if image is not None:
+                area, problem = self._find_game_area(image)
+                if problem is None:
+                    size = image.shape[:2]
+                    if deadline is None or passed == size:
+                        if deadline is not None:
+                            logger.info("Game window is fine now, continuing.")
+                        return to_base_resolution(
+                            image[area.y : area.bottom, area.x : area.right]
+                        )
+                    # Passed once after a wait: look again, the user may still be
+                    # dragging the border or closing the options
+                    passed = size
+                    time.sleep(SETTLE_S)
+                    continue
 
-    def _check_window_size(self, image):
-        """Warn once about window sizes the 1280x720 search regions can't handle well."""
-        if self._size_checked:
-            return
-        self._size_checked = True
+                passed = None
+                if problem != shown:  # A new instruction gets the full wait again
+                    shown, deadline = problem, time.monotonic() + FOCUS_WAIT_S
+                    logger.warning(f"{problem} Waiting up to {FOCUS_WAIT_S} s.")
 
+            if time.monotonic() > deadline:
+                raise DeviceUnavailableError(shown)
+            time.sleep(1)
+
+    def _find_game_area(self, image):
+        """
+        The game picture in a client-area capture, and what the user has to
+        fix before it can be scanned (None if nothing).
+        """
         h, w = image.shape[:2]
-        if abs(w / h - BASE_RES.width / BASE_RES.height) > 0.01:
-            logger.warning(
-                f"Game area is {w}x{h}, not 16:9. Set Screen Ratio to 16:9 in the game options."
+        area = game_area(w, h)
+        if (w, h) != self._client_size:
+            self._client_size, self._bars_ok = (w, h), False
+            logger.info(
+                f"Game area {area.width}x{area.height} at ({area.x}, {area.y}) in a {w}x{h} window"
             )
-        if w < BASE_RES.width:
-            logger.warning(
-                f"Game area is {w}x{h}, smaller than 1280x720. OCR is less accurate when upscaled."
+
+        if area.width < MIN_GAME_AREA.width or area.height < MIN_GAME_AREA.height:
+            return area, (
+                f"Game area is {area.width}x{area.height}, smaller than the "
+                f"{MIN_GAME_AREA.width}x{MIN_GAME_AREA.height} minimum. "
+                "Make the game window bigger (or use fullscreen)."
             )
+        # ponytail: the bars are checked until they pass once per window size, so a
+        # toast over a bar can't stop a scan later on. A picture that stops being
+        # letterboxed without a resize, or an unletterboxed one whose edges were
+        # dark when checked, goes unnoticed.
+        if not self._bars_ok:
+            if not bars_are_black(image, area):
+                return area, (
+                    f"Game window is {w}x{h} (not 16:9) and the picture is not letterboxed. "
+                    "Set Screen Ratio to 16:9 in the game options, or resize the window to 16:9."
+                )
+            self._bars_ok = True
+        return area, None
 
     def _to_screen(self, x, y):
         """
         Screen point for a 1280x720 coordinate. Never returns a point another
         window would get the click on, waits instead (a toast, a popup).
         """
+        if self.read_only:
+            raise RuntimeError("Read-only device: the scanner must not send input.")
         deadline = time.monotonic() + FOCUS_WAIT_S
         warned = False
         while True:
