@@ -122,6 +122,10 @@ See the docs/website index for quick links to user and developer guides:
 
 ### Running the Scripts
 
+#### Quick Start (Windows)
+
+Double-click **`run.bat`** (or run it from a terminal). On the first run it installs the Python packages (with uv if installed, else with Python 3.13+), then shows a menu: automatic scan, read-only scan, settings, layout check, the three exporters and the data update. Each option explains what to do in the game before it starts.
+
 #### First Run & Configuration
 
 The scanner now uses an interactive setup wizard. Run:
