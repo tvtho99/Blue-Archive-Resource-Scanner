@@ -142,25 +142,17 @@ def test_save_merges_into_the_scanned_files(monkeypatch, tmp_path):
     assert processed == [{"Equipment", "Student"}]
 
 
-def test_desktop_device_in_read_only_mode_refuses_input():
-    pytest.importorskip("win32gui")
-    from src.utils.device.desktop.desktop_device import DesktopDevice
-
-    device = DesktopDevice(read_only=True)  # No window needed: refused before any lookup
-    with pytest.raises(RuntimeError, match="must not send input"):
-        device.tap(100, 100)
-    with pytest.raises(RuntimeError, match="must not send input"):
-        device.swipe(0, 0, 100, 100)
-
-
-def test_read_only_capture_never_focuses_the_game(monkeypatch):
+def test_screen_grab_fallback_never_focuses_the_game(monkeypatch):
     pytest.importorskip("win32gui")
     from src.utils.device.desktop import window_manager
 
     wm = object.__new__(window_manager.WindowManager)
-    wm.window_name, wm.hwnd, wm.allow_focus = "Blue Archive", 0x10, False
-    monkeypatch.setattr(wm, "activate", lambda: pytest.fail("focused the game"))
+    wm.window_name, wm.hwnd = "Blue Archive", 0x10
     monkeypatch.setattr(window_manager.win32gui, "GetForegroundWindow", lambda: 0x20)
+    for name in ("SetForegroundWindow", "ShowWindow"):
+        monkeypatch.setattr(
+            window_manager.win32gui, name, lambda *args: pytest.fail("touched the game window")
+        )
 
     with pytest.raises(RuntimeError, match="not in front"):
         wm._capture_mss()

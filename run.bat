@@ -30,8 +30,9 @@ echo       (window or fullscreen, any bigger size works)
 echo     - Display Shortcut Icons: OFF, no controller connected
 echo     - Steam overlay notifications off, start on the lobby
 echo.
-echo   [1] Scan            automatic, moves your mouse (F2 stops it)
-echo   [2] Read-only scan  you go through the game, nothing is clicked
+echo   [1] Scan            automatic, emulator or phone only (F2 stops it)
+echo   [2] Read-only scan  PC client (Steam): you go through the game,
+echo                       nothing is clicked
 echo   [3] Settings        platform (PC client / emulator), scan targets
 echo   [4] Check layout    screenshots with the scan regions drawn on them
 echo   [5] Export          Justin163 Planner
@@ -58,14 +59,11 @@ goto :menu
 
 :scan
 echo.
-echo   Automatic scan
-echo   - It moves your real mouse: don't touch the mouse until it is done.
+echo   Automatic scan: emulator or Android device over ADB
+echo   - It taps through the game menus by itself, which is a macro.
+echo     The PC client (Steam) is never clicked: use [2] for it.
 echo   - Stop: press F2. Screens already finished are still saved.
-echo     Emergency stop: push the mouse into a screen corner.
-echo   - First run: a setup wizard asks how you run the game
-echo     (pick "PC client" for the Steam version).
-echo   - Warning: the PC client ships an anti-cheat and the game's terms
-echo     forbid macros. Use [2] if you don't want automatic clicks.
+echo   - First run: a setup wizard asks how you run the game.
 echo   - If Windows asks "Terminate batch job (Y/N)?", answer N.
 echo.
 call :confirm "Start the scan" || goto :menu

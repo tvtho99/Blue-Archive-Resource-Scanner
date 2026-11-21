@@ -217,9 +217,11 @@ def run_wizard(previous: dict, debug_mode: bool = False) -> dict:
 
     if mode == TargetPlatform.DESKTOP.value:
         console.print(
-            "[yellow]Tip: Screen Ratio 16:9 (window or fullscreen, any size with a game area "
-            "of at least 1280x720), English game text, Display Shortcut Icons OFF, "
-            "no controller connected. Don't touch the mouse while scanning.[/yellow]"
+            "[yellow]The PC client is only read, never clicked: after this setup run "
+            "python -m tools.manual_scan (run.bat option 2) and go through the game "
+            "yourself, the automatic scan does not run on it.\n"
+            "Tip: Screen Ratio 16:9 (window or fullscreen, any size with a game area "
+            "of at least 1280x720), English game text, Display Shortcut Icons OFF.[/yellow]"
         )
         window_title = ask("Game window title", default=window_title)
 

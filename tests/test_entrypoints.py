@@ -80,20 +80,30 @@ def main_run(monkeypatch, tmp_path):
     return run
 
 
-def test_main_debug_flag_and_platform(main_run, monkeypatch, tmp_path, capsys):
+def test_main_debug_flag(main_run, tmp_path, capsys):
     (tmp_path / "settings.json").write_text("{}")
-    monkeypatch.setattr(
-        Config, "settings", AppSettings(target_platform=TargetPlatform.DESKTOP)
-    )
 
     seen, handlers = main_run("--debug")
 
     assert seen == {"debug": True}  # Set before mainpage builds ScreenState
-    out = capsys.readouterr().out
-    assert "Platform: PC client, window 'Blue Archive'" in out
-    assert "not found" not in out
+    assert "not found" not in capsys.readouterr().out
     if sys.platform == "win32":  # launch.py's stop request becomes a Ctrl+C
         assert (signal.SIGBREAK, signal.default_int_handler) in handlers
+
+
+def test_main_never_runs_the_automatic_scan_on_the_pc_client(main_run, monkeypatch, capsys):
+    monkeypatch.setattr(
+        Config, "settings", AppSettings(target_platform=TargetPlatform.DESKTOP)
+    )
+    monkeypatch.setattr(main, "create_device", lambda settings: pytest.fail("device created"))
+
+    with pytest.raises(SystemExit) as stop:
+        main_run()
+
+    assert stop.value.code == 1
+    out = capsys.readouterr().out
+    assert "Platform: PC client, window 'Blue Archive'" in out
+    assert "python -m tools.manual_scan" in out
 
 
 def test_main_warns_about_missing_settings(main_run, capsys):

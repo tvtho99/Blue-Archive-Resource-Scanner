@@ -83,6 +83,14 @@ def main():
         )
     if settings.target_platform == TargetPlatform.DESKTOP:
         print(f"Platform: PC client, window '{settings.window_title}'")
+        # This scan taps through the menus. The PC client ships an anti-cheat and
+        # the game's terms forbid macros, so it is only ever read, never clicked
+        print(
+            "The automatic scan clicks through the game, so it only runs on an "
+            "emulator or a phone. For the PC client go through the game yourself "
+            "with the read-only scan: python -m tools.manual_scan (run.bat option 2)."
+        )
+        sys.exit(1)
     else:
         print(
             f"Platform: {settings.target_platform.value} over ADB "
