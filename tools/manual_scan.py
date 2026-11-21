@@ -159,7 +159,7 @@ def main():
     os.chdir(Config.PROJECT_ROOT)  # Templates and the OCR models are relative paths
     _init_logging()
 
-    device = create_device(Config.settings, read_only=True)
+    device = create_device(Config.settings)
     if not device.connect(Config.ADB_RETRIES):
         raise SystemExit("Could not connect to the device.")
     navigator = ScreenNavigator(device)  # Only its screen checks, never its taps

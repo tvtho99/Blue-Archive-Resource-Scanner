@@ -6,8 +6,8 @@ from src.utils.device.interfaces import DeviceController
 
 logger = logging.getLogger("BA-Scanner")
 
-def create_device(settings: AppSettings, read_only: bool = False) -> DeviceController:
-    """read_only only matters for the PC client: no focus changes, tap/swipe refused."""
+def create_device(settings: AppSettings) -> DeviceController:
+    """The PC client device is screenshots only, the ADB one can also tap and swipe."""
     platform_ = settings.target_platform
     if isinstance(platform_, TargetPlatform):
         platform_ = platform_.value
@@ -17,7 +17,7 @@ def create_device(settings: AppSettings, read_only: bool = False) -> DeviceContr
         from src.utils.device.desktop.desktop_device import DesktopDevice
 
         logger.info("Desktop mode selected.")
-        return DesktopDevice(settings.window_title, read_only=read_only)
+        return DesktopDevice(settings.window_title)
     if platform_ in (TargetPlatform.EMULATOR.value, TargetPlatform.DEVICE.value):
         return ADBDevice(
             host=settings.adb_host,

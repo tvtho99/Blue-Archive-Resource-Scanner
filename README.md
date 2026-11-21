@@ -10,7 +10,7 @@ A Python-based tool to scan and count owned resources in **Blue Archive**.
 
 **Resolution**: Emulators and devices: 1280x720 only. PC client (Steam): any window size with a 16:9 game picture of at least 1280x720.
 
-> **TL;DR:** The scanner automates navigation through the game's menus to collect information that is already visible on screen. It uses screenshots and OCR to read that information and does not modify the game, memory, files, or network traffic, nor does it automate gameplay.
+> **TL;DR:** The scanner collects information that is already visible on screen. It uses screenshots and OCR to read that information and does not modify the game, memory, files, or network traffic, nor does it automate gameplay. On emulators and devices it can also tap through the game's menus by itself; on the PC client (Steam) it only reads the screen and never sends any input.
 
 ## Disclaimer & Scope
 
@@ -22,7 +22,7 @@ The resulting information is processed locally and converted into structured dat
 
 ### What It Does
 
-* Automatically navigates relevant in-game menus.
+* Automatically navigates relevant in-game menus (emulators and devices only, never on the PC client).
 * Captures screenshots of information displayed by the game.
 * Uses OCR to recognize visible values (it can be inaccurate).
 * Collects resource and inventory information.
@@ -126,6 +126,8 @@ See the docs/website index for quick links to user and developer guides:
 
 Double-click **`run.bat`** (or run it from a terminal). On the first run it installs the Python packages (with uv if installed, else with Python 3.13+), then shows a menu: automatic scan, read-only scan, settings, layout check, the three exporters and the data update. Each option explains what to do in the game before it starts.
 
+Hướng dẫn tiếng Việt từ đầu tới cuối: [HUONG_DAN.md](HUONG_DAN.md).
+
 #### First Run & Configuration
 
 The scanner now uses an interactive setup wizard. Run:
@@ -159,13 +161,17 @@ Your choices are saved to `config/settings.json` and `config/screen_config.json`
   python main.py --offline
   ```
 
-Once started, the scanner automatically navigates the game, captures screenshots, extracts data using the selected OCR engine, and saves the results to the `output/` directory.
+Once started, the scanner automatically navigates the game (emulators and devices, over ADB), captures screenshots, extracts data using the selected OCR engine, and saves the results to the `output/` directory.
+
+To stop a scan, press **F2** (scans started with `launch.py`) or **Ctrl+C** in the terminal. Screens that finished before the stop are still processed, which can take a few seconds. Pressing Ctrl+C again while `launch.py` waits kills the scan at once, without processing.
 
 #### PC Client (Steam)
 
-Choose **PC client / desktop window** in the wizard. The scanner finds the window titled `Blue Archive` and detects its size on every screenshot. It finds the 16:9 game picture inside the window, skipping the black bars the game draws when the window or monitor is not 16:9 (for example fullscreen on a 16:10 laptop or an ultrawide monitor), and scales it to 1280x720.
+On the PC client the scanner is **read-only**: it has no code that clicks, drags, presses keys in the game or focuses the game window. The automatic scan refuses to start there, you go through the game yourself with the [read-only mode](#read-only-mode-no-clicks) below.
 
-**Window size:** any size works as long as the 16:9 game picture is at least **1280x720**. Bigger is fine. Sizes that scale exactly (1280x720, 2560x1440, 3840x2160) give the cleanest OCR. If the picture is smaller, or the window is not 16:9 and has no black bars, the scan pauses, tells you what to change, and continues by itself once the window is fixed. It stops after 60 seconds.
+Choose **PC client / desktop window** in the wizard or the settings window. The scanner finds the window titled `Blue Archive` and detects its size on every screenshot. It finds the 16:9 game picture inside the window, skipping the black bars the game draws when the window or monitor is not 16:9 (for example fullscreen on a 16:10 laptop or an ultrawide monitor), and scales it to 1280x720.
+
+**Window size:** any size works as long as the 16:9 game picture is at least **1280x720**. Bigger is fine. Sizes that scale exactly (1280x720, 2560x1440, 3840x2160) give the cleanest OCR. If the picture is smaller, or the window is not 16:9 and has no black bars, the scanner tells you what to change and continues by itself once the window is fixed.
 
 In the game options:
 
@@ -173,18 +179,13 @@ In the game options:
 - **Screen Ratio**: 16:9.
 - **Language**: English. The scanner reads page titles and item names in English only.
 - **Display Shortcut Icons**: Off. The key badges cover text the scanner reads.
-- Disconnect controllers. The game ignores the mouse while one is connected.
 - Turn off Steam overlay notifications while scanning. They are drawn into the game picture and can cover items.
 
-While scanning, the scanner moves your real mouse, so don't touch it. Keep the whole game window on screen. If clicks do nothing, make sure the game and the scanner run at the same permission level (both as a normal user, or both as administrator).
-
-To stop a scan, press **F2** (scans started with `launch.py`) or **Ctrl+C** in the terminal. Screens that finished before the stop are still processed, which can take a few seconds. Pressing Ctrl+C again while `launch.py` waits kills the scan at once, without processing. Moving the mouse into a screen corner also stops the scan (pyautogui failsafe).
-
-> **Warning:** The Steam client ships Nexon Game Security, a kernel-level anti-cheat, and the Blue Archive Terms of Service prohibit macros and automated data collection. Using the scanner on PC may put your account at risk. Use it at your own discretion.
+> **Warning:** The Steam client ships Nexon Game Security, an anti-cheat, and Nexon's policies prohibit macros and automation tools. That is why the scanner never sends input to the PC client and only takes screenshots of its window, like a screen recorder does. Whether reading your own screen this way is permitted is still yours to check, see [Terms of Service](#terms-of-service).
 
 #### Read-only Mode (no clicks)
 
-The normal scan moves your mouse to go through the menus, which is what makes it a macro. In read-only mode you go through the game yourself and the scanner only takes screenshots and reads them. It never clicks, drags, presses keys in the game, or focuses the game window:
+The automatic scan taps through the menus, which is what makes it a macro. In read-only mode you go through the game yourself and the scanner only takes screenshots and reads them. It never clicks, drags, presses keys in the game, or focuses the game window. It is the only mode for the PC client and also works for emulators:
 
 ```bash
 python -m tools.manual_scan
@@ -194,7 +195,7 @@ python -m tools.manual_scan
 - **Equipment / Items**: click the items one by one and scroll yourself. Keep each item's details on screen for about a second; the console counts every item it captured.
 - **Students**: open a student's page and go through your students with the next arrow, about a second per student.
 
-Press **F2** (or Ctrl+C in the terminal) when done. Everything captured is read, saved and post-processed, so the exporters work as after a normal scan. The results are merged into `output/owned/`: items and students you didn't look at keep their earlier values, including items you have used up since (a normal scan replaces the whole file). It works for the PC client and for emulators.
+Press **F2** (or Ctrl+C in the terminal) when done. Everything captured is read, saved and post-processed, so the exporters work as after a normal scan. The results are merged into `output/owned/`: items and students you didn't look at keep their earlier values, including items you have used up since (an automatic scan replaces the whole file).
 
 #### Checking the Layout
 

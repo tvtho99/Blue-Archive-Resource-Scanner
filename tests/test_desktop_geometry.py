@@ -5,22 +5,11 @@ pytest.importorskip("win32gui")  # Desktop backend is Windows-only
 
 from src.core.area import Region  # noqa: E402
 from src.utils.device.desktop.window_manager import (  # noqa: E402
-    WindowManager,
     bars_are_black,
     crop_to_client,
     game_area,
     to_base_resolution,
 )
-
-
-class StubWindow(WindowManager):
-    """WindowManager over a fixed client area, no real window behind it."""
-
-    def __init__(self, client: Region):
-        self.client = client
-
-    def get_client_region(self) -> Region:
-        return self.client
 
 
 class TestCropToClient:
@@ -127,21 +116,3 @@ class TestBarsAreBlack:
         area = game_area(1920, 1093)
         assert area.y == 6
         assert bars_are_black(image, area)
-
-
-class TestScaleCoords:
-    def test_maps_into_the_letterboxed_picture(self):
-        wm = StubWindow(Region(0, 0, 2560, 1600))
-        assert wm.scale_coords(1238, 25) == (2476, 130)
-        assert wm.scale_coords(0, 0) == (0, 80)  # Picture corners
-        assert wm.scale_coords(1280, 720) == (2560, 1520)
-
-    def test_adds_client_origin_and_pillarbox_offset(self):
-        wm = StubWindow(Region(100, 50, 3440, 1440))
-        assert wm.scale_coords(0, 0) == (540, 50)
-        assert wm.scale_coords(1280, 720) == (3100, 1490)
-
-    def test_16_9_window_fills_the_client(self):
-        wm = StubWindow(Region(301, 245, 1920, 1080))
-        assert wm.scale_coords(0, 0) == (301, 245)
-        assert wm.scale_coords(640, 360) == (1261, 785)

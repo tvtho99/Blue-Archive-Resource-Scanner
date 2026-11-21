@@ -13,22 +13,25 @@ from .window_manager import (
     to_base_resolution,
 )
 
-set_dpi_awareness()  # Before pyautogui is imported, see set_dpi_awareness
+set_dpi_awareness()
 
-import pyautogui  # noqa: E402
-
-pyautogui.FAILSAFE = True  # Mouse into a screen corner = emergency stop
-FAILSAFE_MSG = "Mouse moved to a screen corner (pyautogui failsafe)."
 SETTLE_S = 2  # After a wait, a fixed window must pass twice this far apart
+READ_ONLY_MSG = (
+    "The PC client is read-only: the scanner never clicks, drags or focuses the game. "
+    "Go through the game yourself with python -m tools.manual_scan."
+)
 
 logger = logging.getLogger("BA-Scanner")
 
 
 class DesktopDevice(DeviceController):
-    def __init__(self, window_name="Blue Archive", read_only=False):
+    """
+    The PC client window, screenshots only. The game ships an anti-cheat and its
+    terms forbid macros, so nothing here can click, drag or focus the game.
+    """
+
+    def __init__(self, window_name="Blue Archive"):
         self.window_name = window_name
-        # read_only: screenshots only, never a click, a drag or a focus change
-        self.read_only = read_only
         self.wm: WindowManager | None = None
         self._client_size = None  # Window size of the last capture
         self._bars_ok = False  # Its bars were checked black, see _find_game_area
@@ -36,7 +39,7 @@ class DesktopDevice(DeviceController):
     def connect(self, retries=0):
         """Find the game window, there is nothing else to connect to."""
         try:
-            self.wm = WindowManager(self.window_name, allow_focus=not self.read_only)
+            self.wm = WindowManager(self.window_name)
         except RuntimeError as e:
             logger.error(e)
             return False
@@ -56,7 +59,7 @@ class DesktopDevice(DeviceController):
             try:
                 image = self.wm.get_screenshot()
             except DeviceUnavailableError:
-                raise  # Game gone or never focused: stop rather than scan blank data
+                raise  # Game gone: stop rather than scan blank data
             except Exception as e:  # noqa: BLE001
                 if deadline is None:
                     logger.error(f"Screenshot of '{self.window_name}' failed: {e}")
@@ -122,49 +125,8 @@ class DesktopDevice(DeviceController):
             self._bars_ok = True
         return area, None
 
-    def _to_screen(self, x, y):
-        """
-        Screen point for a 1280x720 coordinate. Never returns a point another
-        window would get the click on, waits instead (a toast, a popup).
-        """
-        if self.read_only:
-            raise RuntimeError("Read-only device: the scanner must not send input.")
-        deadline = time.monotonic() + FOCUS_WAIT_S
-        warned = False
-        while True:
-            self.wm.activate()
-            sx, sy = self.wm.scale_coords(x, y)
-            if self.wm.owns_point(sx, sy):
-                return sx, sy
-            if time.monotonic() > deadline:
-                raise DeviceUnavailableError(
-                    f"'{self.window_name}' is covered or off-screen at ({sx}, {sy})."
-                )
-            if not warned:
-                logger.warning(
-                    f"'{self.window_name}' is covered or off-screen at ({sx}, {sy}), waiting."
-                )
-                warned = True
-            time.sleep(0.5)
-
     def tap(self, x, y, duration_ms=100):
-        sx, sy = self._to_screen(x, y)
-        try:
-            pyautogui.click(sx, sy)
-        except pyautogui.FailSafeException as e:
-            raise DeviceUnavailableError(FAILSAFE_MSG) from e
-        return True
+        raise DeviceUnavailableError(READ_ONLY_MSG)  # Stops a scan, see main.py
 
     def swipe(self, x1, y1, x2, y2, duration_ms=500):
-        sx1, sy1 = self._to_screen(x1, y1)
-        sx2, sy2 = self._to_screen(x2, y2)
-        try:
-            pyautogui.moveTo(sx1, sy1)
-            pyautogui.mouseDown()
-            try:
-                pyautogui.moveTo(sx2, sy2, duration=duration_ms / 1000)
-            finally:
-                pyautogui.mouseUp()
-        except pyautogui.FailSafeException as e:
-            raise DeviceUnavailableError(FAILSAFE_MSG) from e
-        return True
+        raise DeviceUnavailableError(READ_ONLY_MSG)

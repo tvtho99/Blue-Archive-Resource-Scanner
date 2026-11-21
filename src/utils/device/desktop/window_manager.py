@@ -1,14 +1,11 @@
 import ctypes
 import logging
 import threading
-import time
 from ctypes import windll, wintypes
 
 import cv2
 import mss
 import numpy as np
-import pywintypes
-import win32con
 import win32gui
 from windows_capture import Frame, InternalCaptureControl, WindowsCapture
 
@@ -28,9 +25,8 @@ FOCUS_WAIT_S = 60
 
 def set_dpi_awareness():
     """
-    Make window rects, captures and clicks all use physical pixels.
-    Must run before pyautogui is imported: it calls SetProcessDPIAware()
-    (system-aware) at import time, and the first awareness call wins.
+    Make window rects and captures both use physical pixels.
+    The first awareness call of a process wins, so call it before any capture.
     """
     # https://learn.microsoft.com/en-us/windows/win32/hidpi/dpi-awareness-context
     try:
@@ -130,9 +126,10 @@ def to_base_resolution(image: np.ndarray) -> np.ndarray:
 
 
 class WindowManager:
-    def __init__(self, window_name: str, allow_focus: bool = True):
+    """Finds the game window and captures it. Only reads: never restores, focuses or clicks it."""
+
+    def __init__(self, window_name: str):
         self.window_name = window_name
-        self.allow_focus = allow_focus  # False: never restore or focus the window
         self.hwnd = find_game_window(window_name)
         self.window_class = win32gui.GetClassName(self.hwnd)
 
@@ -140,31 +137,6 @@ class WindowManager:
         """Re-find the window if the game was restarted, never a different kind of window."""
         if not win32gui.IsWindow(self.hwnd):
             self.hwnd = find_game_window(self.window_name, self.window_class)
-
-    def activate(self):
-        """
-        Restore and focus the game window, since clicks land on whatever is on top.
-        Windows may refuse to hand focus to a background process. Then wait for
-        the user to click the game window, which also pauses the scan meanwhile.
-        """
-        self._ensure_window()
-        if win32gui.IsIconic(self.hwnd):
-            win32gui.ShowWindow(self.hwnd, win32con.SW_RESTORE)
-        if win32gui.GetForegroundWindow() == self.hwnd:
-            return
-
-        try:
-            win32gui.SetForegroundWindow(self.hwnd)
-        except pywintypes.error:
-            pass
-
-        deadline = time.monotonic() + FOCUS_WAIT_S
-        if win32gui.GetForegroundWindow() != self.hwnd:
-            logger.warning(f"Click the '{self.window_name}' window to continue.")
-        while win32gui.GetForegroundWindow() != self.hwnd:
-            if time.monotonic() > deadline:
-                raise DeviceUnavailableError(f"'{self.window_name}' did not get focus.")
-            time.sleep(0.2)
 
     def get_client_region(self) -> Region:
         """The client area of the window (game picture plus any bars), in screen coordinates."""
@@ -240,10 +212,8 @@ class WindowManager:
         return crop_to_client(image, frame, client)
 
     def _capture_mss(self) -> np.ndarray:
-        """Grabs screen pixels, so the game window has to be on top."""
-        if self.allow_focus:
-            self.activate()
-        elif win32gui.GetForegroundWindow() != self.hwnd:
+        """Grabs screen pixels, so the user has to have the game window on top."""
+        if win32gui.GetForegroundWindow() != self.hwnd:
             raise RuntimeError(f"'{self.window_name}' is not in front, can't grab it.")
         reg = self.get_client_region()
         with mss.mss() as sct:
@@ -254,20 +224,3 @@ class WindowManager:
                 "height": reg.height,
             }
             return np.array(sct.grab(monitor))[:, :, :3]
-
-    def scale_coords(self, x: int, y: int):
-        """
-        Translates 1280x720 coords to absolute screen coords inside the game
-        picture, found the same way as for the capture (game_area).
-        """
-        client = self.get_client_region()
-        area = game_area(client.width, client.height)
-        return (
-            int(client.x + area.x + x * area.width / BASE_RES.width),
-            int(client.y + area.y + y * area.height / BASE_RES.height),
-        )
-
-    def owns_point(self, x: int, y: int) -> bool:
-        """True if a click at this screen point would reach the game window."""
-        hwnd = win32gui.WindowFromPoint((x, y))
-        return bool(hwnd) and win32gui.GetAncestor(hwnd, win32con.GA_ROOT) == self.hwnd

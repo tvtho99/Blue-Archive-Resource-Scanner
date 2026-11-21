@@ -1,4 +1,4 @@
-"""DesktopDevice capture and tap checks with a stub window and a fake clock."""
+"""DesktopDevice capture checks with a fake window and clock, and that it never sends input."""
 
 import logging
 
@@ -32,22 +32,6 @@ class FakeWindow:
         if isinstance(frame, BaseException):
             raise frame
         return frame
-
-
-class StubWindow(WindowManager):
-    """Focused, uncovered client area at a fixed place, no real window behind it."""
-
-    def __init__(self, client: Region):
-        self.client = client
-
-    def get_client_region(self) -> Region:
-        return self.client
-
-    def activate(self):
-        pass
-
-    def owns_point(self, x, y) -> bool:
-        return True
 
 
 class FakeClock:
@@ -250,14 +234,14 @@ def test_stop_errors_pass_through(clock, error):
     assert device.wm.captures == 2
 
 
-def test_tap_lands_in_the_letterboxed_picture(clock, monkeypatch):
-    clicks = []
-    monkeypatch.setattr(
-        desktop_device.pyautogui, "click", lambda x, y: clicks.append((x, y))
-    )
-    device = DesktopDevice()
-    device.wm = StubWindow(Region(0, 0, 2560, 1600))
+def test_never_sends_input():
+    device = DesktopDevice()  # No window needed: refused before any lookup
 
-    device.tap(1238, 25)
-
-    assert clicks == [(2476, 130)]
+    with pytest.raises(DeviceUnavailableError, match="read-only"):
+        device.tap(100, 100)
+    with pytest.raises(DeviceUnavailableError, match="read-only"):
+        device.swipe(0, 0, 100, 100)
+    # Nothing on the PC path can click, drag or focus the game
+    assert not hasattr(desktop_device, "pyautogui")
+    for name in ("activate", "scale_coords", "owns_point"):
+        assert not hasattr(WindowManager, name)
